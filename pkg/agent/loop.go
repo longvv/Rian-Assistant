@@ -523,10 +523,22 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 			}
 
 			errMsg := strings.ToLower(err.Error())
-			isContextError := strings.Contains(errMsg, "token") ||
-				strings.Contains(errMsg, "context") ||
+
+			// Rate limit errors must NOT trigger compression — they contain "token"
+			// in the message but are not context-length errors.
+			isRateLimit := strings.Contains(errMsg, "rate_limit") ||
+				strings.Contains(errMsg, "rate limit") ||
+				strings.Contains(errMsg, "429")
+
+			isContextError := !isRateLimit && (strings.Contains(errMsg, "context_length_exceeded") ||
+				strings.Contains(errMsg, "context window") ||
+				strings.Contains(errMsg, "too many tokens") ||
+				strings.Contains(errMsg, "maximum context") ||
+				strings.Contains(errMsg, "context limit") ||
 				strings.Contains(errMsg, "invalidparameter") ||
-				strings.Contains(errMsg, "length")
+				strings.Contains(errMsg, "length exceeded") ||
+				// Fallback: "token" + "length" together (not just "token" alone)
+				(strings.Contains(errMsg, "token") && strings.Contains(errMsg, "length")))
 
 			if isContextError && retry < maxRetries {
 				logger.WarnCF("agent", "Context window error detected, attempting compression", map[string]interface{}{
