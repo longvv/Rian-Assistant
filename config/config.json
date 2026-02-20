@@ -1,21 +1,21 @@
 {
   "model_list": [
     {
-      "model_name": "my-claude",
-      "model": "anthropic/claude-sonnet-4-5-20250929",
+      "model_name": "claude-sonnet-4-6",
+      "model": "anthropic/claude-sonnet-4-6",
       "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}"
     }
   ],
   "agents": {
     "defaults": {
-      "model": "my-claude"
+      "model": "claude-sonnet-4-6"
     }
   },
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo",
-      "allow_from": ["475776460"]
+      "token": "${PICOCLAW_CHANNELS_TELEGRAM_TOKEN}",
+      "allow_from": "${PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM}"
     }
   }
 }
