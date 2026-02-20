@@ -18,7 +18,12 @@
   ],
   "channels": {
     "telegram": {
-      "enabled": true
+      "enabled": true,
+      "token": "${8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo}",
+      "proxy": "",
+      "allow_from": [
+        "${PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM}"
+      ]
     }
   },
   "tools": {
