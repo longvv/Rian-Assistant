@@ -735,41 +735,72 @@ func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, c
 }
 
 // forceCompression aggressively reduces context when the limit is hit.
-// It drops the oldest 50% of messages (keeping system prompt and last user message).
+// It drops the oldest 50% of messages, but always preserves complete
+// tool_call/tool_result groups to avoid Anthropic API validation errors.
 func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
 	history := agent.Sessions.GetHistory(sessionKey)
 	if len(history) <= 4 {
 		return
 	}
 
-	// Keep system prompt (usually [0]) and the very last message (user's trigger)
-	// We want to drop the oldest half of the *conversation*
-	// Assuming [0] is system, [1:] is conversation
+	// [0] is the system prompt; [1:last] is the conversation; [last] is the last user msg
 	conversation := history[1 : len(history)-1]
 	if len(conversation) == 0 {
 		return
 	}
 
-	// Helper to find the mid-point of the conversation
-	mid := len(conversation) / 2
+	// Group conversation messages into complete "turns":
+	// A turn is an assistant message (optionally with tool_calls) plus all
+	// immediately following tool-result messages for those tool_calls.
+	// This ensures we never drop half of a tool_call/tool_result pair.
+	type group struct {
+		msgs []providers.Message
+	}
+	var groups []group
+	i := 0
+	for i < len(conversation) {
+		msg := conversation[i]
+		g := group{msgs: []providers.Message{msg}}
+		i++
+		// If this assistant message has tool calls, collect all following tool results
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for i < len(conversation) && conversation[i].Role == "tool" {
+				g.msgs = append(g.msgs, conversation[i])
+				i++
+			}
+		}
+		groups = append(groups, g)
+	}
 
-	// New history structure:
-	// 1. System Prompt (with compression note appended)
-	// 2. Second half of conversation
-	// 3. Last message
+	if len(groups) == 0 {
+		return
+	}
 
-	droppedCount := mid
-	keptConversation := conversation[mid:]
+	// Drop the oldest half of groups (by group count, not message count)
+	mid := len(groups) / 2
+	if mid == 0 {
+		mid = 1
+	}
 
-	newHistory := make([]providers.Message, 0)
+	// Count dropped messages for the compression note
+	droppedCount := 0
+	for _, g := range groups[:mid] {
+		droppedCount += len(g.msgs)
+	}
 
-	// Append compression note to the original system prompt instead of adding a new system message
-	// This avoids having two consecutive system messages which some APIs (like Zhipu) reject
+	keptGroups := groups[mid:]
+	var keptConversation []providers.Message
+	for _, g := range keptGroups {
+		keptConversation = append(keptConversation, g.msgs...)
+	}
+
+	newHistory := make([]providers.Message, 0, 2+len(keptConversation))
+
+	// Append compression note to the original system prompt
 	compressionNote := fmt.Sprintf("\n\n[System Note: Emergency compression dropped %d oldest messages due to context limit]", droppedCount)
 	enhancedSystemPrompt := history[0]
 	enhancedSystemPrompt.Content = enhancedSystemPrompt.Content + compressionNote
 	newHistory = append(newHistory, enhancedSystemPrompt)
-
 	newHistory = append(newHistory, keptConversation...)
 	newHistory = append(newHistory, history[len(history)-1]) // Last message
 
