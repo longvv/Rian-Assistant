@@ -432,7 +432,12 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if err := json.Unmarshal(data, cfg); err != nil {
+	// Expand ${VAR} references in the JSON before unmarshaling.
+	// This allows model_list fields (which have no env: struct tags) to
+	// reference environment variables using ${VARNAME} syntax.
+	expanded := os.ExpandEnv(string(data))
+
+	if err := json.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, err
 	}
 
