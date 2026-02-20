@@ -19,7 +19,7 @@
   "channels": {
     "telegram": {
       "enabled": true,
-      "token": "${8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo}",
+      "token": "${PICOCLAW_CHANNELS_TELEGRAM_TOKEN}",
       "proxy": "",
       "allow_from": [
         "${PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM}"
