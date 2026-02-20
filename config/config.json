@@ -6,7 +6,9 @@
   },
   "channels": {
     "telegram": {
-      "enabled": true
+      "enabled": true,
+      "token": "${PICOCLAW_CHANNELS_TELEGRAM_TOKEN}",
+      "allow_from": "${PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM}"
     }
   }
 }
