@@ -526,9 +526,22 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 
 			// Rate limit errors must NOT trigger compression — they contain "token"
 			// in the message but are not context-length errors.
+			// Apply exponential backoff before retrying.
 			isRateLimit := strings.Contains(errMsg, "rate_limit") ||
 				strings.Contains(errMsg, "rate limit") ||
 				strings.Contains(errMsg, "429")
+
+			if isRateLimit && retry < maxRetries {
+				wait := time.Duration(1<<uint(retry)) * time.Second // 1s, 2s
+				logger.WarnCF("agent", "Rate limit hit, backing off", map[string]interface{}{
+					"retry":     retry,
+					"wait_secs": wait.Seconds(),
+					"agent_id":  agent.ID,
+					"iteration": iteration,
+				})
+				time.Sleep(wait)
+				continue
+			}
 
 			isContextError := !isRateLimit && (strings.Contains(errMsg, "context_length_exceeded") ||
 				strings.Contains(errMsg, "context window") ||
@@ -706,6 +719,13 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				contentForLLM = toolResult.Err.Error()
 			}
 
+			// Cap tool result size to avoid burning token budget on huge pages.
+			// Default cap: 4000 chars (~1000 tokens). Keeps context lean.
+			const maxToolResultChars = 4000
+			if len(contentForLLM) > maxToolResultChars {
+				contentForLLM = contentForLLM[:maxToolResultChars] + "\n[...truncated]"
+			}
+
 			toolResultMsg := providers.Message{
 				Role:       "tool",
 				Content:    contentForLLM,
@@ -825,15 +845,12 @@ func (al *AgentLoop) forceCompression(agent *AgentInstance, sessionKey string) {
 		keptConversation = append(keptConversation, g.msgs...)
 	}
 
-	newHistory := make([]providers.Message, 0, 2+len(keptConversation))
-
-	// Append compression note to the original system prompt
-	compressionNote := fmt.Sprintf("\n\n[System Note: Emergency compression dropped %d oldest messages due to context limit]", droppedCount)
-	enhancedSystemPrompt := history[0]
-	enhancedSystemPrompt.Content = enhancedSystemPrompt.Content + compressionNote
-	newHistory = append(newHistory, enhancedSystemPrompt)
+	// history[0] is the FIRST USER MESSAGE (not a system prompt — the system prompt
+	// is injected separately by ContextBuilder.BuildMessages and not stored in session).
+	// Preserve it unmodified; do NOT append any compression note to it.
+	newHistory := make([]providers.Message, 0, 1+len(keptConversation))
+	newHistory = append(newHistory, history[0]) // first user message, untouched
 	newHistory = append(newHistory, keptConversation...)
-	newHistory = append(newHistory, history[len(history)-1]) // Last message
 
 	// Update session
 	agent.Sessions.SetHistory(sessionKey, newHistory)

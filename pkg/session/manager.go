@@ -23,12 +23,14 @@ type SessionManager struct {
 	sessions map[string]*Session
 	mu       sync.RWMutex
 	storage  string
+	ttl      time.Duration // sessions older than this are pruned on load
 }
 
 func NewSessionManager(storage string) *SessionManager {
 	sm := &SessionManager{
 		sessions: make(map[string]*Session),
 		storage:  storage,
+		ttl:      7 * 24 * time.Hour, // default: 7-day TTL
 	}
 
 	if storage != "" {
@@ -259,10 +261,48 @@ func (sm *SessionManager) loadSessions() error {
 			continue
 		}
 
+		// Prune sessions older than TTL to prevent unbounded disk growth
+		if sm.ttl > 0 && time.Since(session.Updated) > sm.ttl {
+			_ = os.Remove(sessionPath)
+			continue
+		}
+
+		// Strip orphaned tool_call tails: an assistant message with tool_calls
+		// that was saved without its tool results (e.g. crash mid-iteration)
+		// will cause every subsequent LLM call to fail with a 400 error.
+		session.Messages = sanitizeMessages(session.Messages)
+
 		sm.sessions[session.Key] = &session
 	}
 
 	return nil
+}
+
+// sanitizeMessages removes any incomplete tool_call/tool_result pairs from the
+// tail of a message list. Walking backward, if the last group is an assistant
+// message with tool_calls that is NOT followed by a matching set of tool result
+// messages, the whole group is dropped. This repairs sessions corrupted by
+// crashes or rate-limit interruptions mid-iteration.
+func sanitizeMessages(msgs []providers.Message) []providers.Message {
+	for {
+		if len(msgs) == 0 {
+			break
+		}
+		last := msgs[len(msgs)-1]
+		// If the tail is a tool result, it's part of a completed pair — OK.
+		if last.Role == "tool" {
+			break
+		}
+		// If the tail is an assistant message WITH tool_calls, the results are
+		// missing (they would appear after). Drop the assistant message.
+		if last.Role == "assistant" && len(last.ToolCalls) > 0 {
+			msgs = msgs[:len(msgs)-1]
+			continue
+		}
+		// Any other tail (user message, assistant without tool_calls) is fine.
+		break
+	}
+	return msgs
 }
 
 // SetHistory updates the messages of a session.
