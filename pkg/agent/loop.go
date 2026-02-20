@@ -563,6 +563,25 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				)
 				continue
 			}
+
+			// Detect corrupted sessions: 400 with orphaned tool_call_ids.
+			// This happens when a previous run saved an incomplete tool_call to the
+			// session (e.g. crashed mid-iteration). Auto-recover by clearing the session.
+			isOrphanedToolCall := strings.Contains(errMsg, "tool_call_ids did not have response") ||
+				strings.Contains(errMsg, "tool_calls") && strings.Contains(errMsg, "followed by tool messages")
+			if isOrphanedToolCall && retry < maxRetries {
+				logger.WarnCF("agent", "Corrupted session detected (orphaned tool_call), clearing and retrying", map[string]interface{}{
+					"session_key": opts.SessionKey,
+					"retry":       retry,
+				})
+				agent.Sessions.SetHistory(opts.SessionKey, nil)
+				agent.Sessions.Save(opts.SessionKey)
+				messages = agent.ContextBuilder.BuildMessages(
+					nil, "", opts.UserMessage,
+					nil, opts.Channel, opts.ChatID,
+				)
+				continue
+			}
 			break
 		}
 
