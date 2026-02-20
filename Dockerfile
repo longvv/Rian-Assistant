@@ -39,5 +39,9 @@ USER picoclaw
 # Run onboard to create initial directories and config
 RUN /usr/local/bin/picoclaw onboard
 
+# Override the generated config with our custom config
+# This allows environment variables to drive provider/model selection on Railway
+COPY --chown=picoclaw:picoclaw config/config.json /home/picoclaw/.picoclaw/config.json
+
 ENTRYPOINT ["picoclaw"]
 CMD ["gateway"]
