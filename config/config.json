@@ -1,0 +1,5 @@
+"telegram": {
+  "enabled": true,
+  "token": "8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo",
+  "allow_from": ["475776460"]
+}
