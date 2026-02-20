@@ -1,14 +1,8 @@
 {
-  "model_list": [
-    {
-      "model_name": "claude-sonnet-4-6",
-      "model": "${PICOCLAW_AGENTS_DEFAULTS_MODEL}",
-      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}"
-    }
-  ],
   "agents": {
     "defaults": {
-      "model": "claude-sonnet-4-6"
+      "provider": "anthropic",
+      "model": "${PICOCLAW_AGENTS_DEFAULTS_MODEL}"
     }
   },
   "channels": {
