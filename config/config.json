@@ -5,7 +5,6 @@
       "model": "claude-sonnet-4.6",
       "restrict_to_workspace": true,
       "max_tokens": 8192,
-      "temperature": 0.7,
       "max_tool_iterations": 20
     }
   },
@@ -13,21 +12,13 @@
     {
       "model_name": "claude-sonnet-4.6",
       "model": "anthropic/claude-sonnet-4.6",
-      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}",
+      "api_key": "",
       "api_base": "https://api.anthropic.com/v1"
     }
   ],
   "channels": {
     "telegram": {
-      "enabled": true,
-      "token": "${PICOCLAW_CHANNELS_TELEGRAM_TOKEN}",
-      "allow_from": ["${PICOCLAW_CHANNELS_TELEGRAM_ALLOW_FROM}"]
-    }
-  },
-  "providers": {
-    "anthropic": {
-      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}",
-      "api_base": "https://api.anthropic.com/v1"
+      "enabled": true
     }
   },
   "tools": {
