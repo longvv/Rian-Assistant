@@ -1,5 +1,21 @@
-"telegram": {
-  "enabled": true,
-  "token": "8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo",
-  "allow_from": ["475776460"]
+{
+  "model_list": [
+    {
+      "model_name": "my-claude",
+      "model": "anthropic/claude-3-5-sonnet-20241022",
+      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}"
+    }
+  ],
+  "agents": {
+    "defaults": {
+      "model": "my-claude"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "token": "8525537437:AAFPCA_i2w37GSbRvlg0mRXFxcKZUJqwCQo",
+      "allow_from": ["475776460"]
+    }
+  }
 }
