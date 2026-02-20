@@ -1,8 +1,7 @@
 {
   "agents": {
     "defaults": {
-      "provider": "anthropic",
-      "model": "${PICOCLAW_AGENTS_DEFAULTS_MODEL}"
+      "provider": "anthropic"
     }
   },
   "channels": {
