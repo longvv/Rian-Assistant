@@ -14,7 +14,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/channels"
@@ -1065,15 +1064,23 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, agent *AgentInstance, b
 }
 
 // estimateTokens estimates the number of tokens in a message list.
-// Uses a safe heuristic of 2.5 characters per token to account for CJK and other
-// overheads better than the previous 3 chars/token.
+// Uses a CJK-aware heuristic:
+// - ASCII characters: ~4 chars per token
+// - Non-ASCII (CJK/Unicode): ~1.5 tokens per char
 func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
-	totalChars := 0
+	tokens := 0.0
 	for _, m := range messages {
-		totalChars += utf8.RuneCountInString(m.Content)
+		// add small overhead per message
+		tokens += 4.0
+		for _, r := range m.Content {
+			if r < 128 {
+				tokens += 0.25 // 4 chars/token
+			} else {
+				tokens += 1.5 // 1.5 tokens/char for CJK
+			}
+		}
 	}
-	// 2.5 chars per token = totalChars * 2 / 5
-	return totalChars * 2 / 5
+	return int(tokens)
 }
 
 func (al *AgentLoop) handleCommand(ctx context.Context, msg bus.InboundMessage) (string, bool) {

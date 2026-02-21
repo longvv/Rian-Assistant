@@ -432,17 +432,22 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Expand ${VAR} references in the JSON before unmarshaling.
-	// This allows model_list fields (which have no env: struct tags) to
-	// reference environment variables using ${VARNAME} syntax.
-	expanded := os.ExpandEnv(string(data))
-
-	if err := json.Unmarshal([]byte(expanded), cfg); err != nil {
+	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
 
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
+	}
+
+	// Expand ${VAR} references ONLY in specific fields like ModelList.
+	// We avoid global os.ExpandEnv on raw json to prevent corrupting
+	// actual prompts or webhooks that might contain ${something}.
+	for i := range cfg.ModelList {
+		cfg.ModelList[i].APIKey = os.ExpandEnv(cfg.ModelList[i].APIKey)
+		cfg.ModelList[i].APIBase = os.ExpandEnv(cfg.ModelList[i].APIBase)
+		cfg.ModelList[i].Proxy = os.ExpandEnv(cfg.ModelList[i].Proxy)
+		cfg.ModelList[i].Workspace = os.ExpandEnv(cfg.ModelList[i].Workspace)
 	}
 
 	// Auto-migrate: if only legacy providers config exists, convert to model_list
