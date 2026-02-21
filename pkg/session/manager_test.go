@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func TestSanitizeFilename(t *testing.T) {
@@ -70,5 +72,67 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 		if err := sm.Save(key); err == nil {
 			t.Errorf("Save(%q) should have failed but didn't", key)
 		}
+	}
+}
+
+func TestSanitizeMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    []providers.Message
+		expected int // expected length after sanitization
+	}{
+		{
+			name:     "Empty history",
+			input:    []providers.Message{},
+			expected: 0,
+		},
+		{
+			name:     "Normal history ending with user message",
+			input:    []providers.Message{{Role: "user", Content: "Hello"}},
+			expected: 1,
+		},
+		{
+			name: "Normal history ending with tool result",
+			input: []providers.Message{
+				{Role: "user", Content: "Search for X"},
+				{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "1"}}},
+				{Role: "tool", Content: "Result for X", ToolCallID: "1"},
+			},
+			expected: 3,
+		},
+		{
+			name: "Orphaned tool call at tail (needs stripping)",
+			input: []providers.Message{
+				{Role: "user", Content: "Search for X"},
+				{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "1"}}},
+			},
+			expected: 1, // Only the user message should remain
+		},
+		{
+			name: "Multiple orphaned tool calls at tail",
+			input: []providers.Message{
+				{Role: "user", Content: "Search for X"},
+				{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "1"}}},
+				{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "2"}}},
+			},
+			expected: 1, // Both incomplete assistant messages dropped
+		},
+		{
+			name: "Assistant message at tail but NO tool calls",
+			input: []providers.Message{
+				{Role: "user", Content: "Hello"},
+				{Role: "assistant", Content: "Hi there!"},
+			},
+			expected: 2, // Should not strip regular text replies
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeMessages(tt.input)
+			if len(got) != tt.expected {
+				t.Errorf("sanitizeMessages() returned %d messages, want %d", len(got), tt.expected)
+			}
+		})
 	}
 }
