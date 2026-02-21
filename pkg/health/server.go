@@ -40,6 +40,7 @@ func NewServer(host string, port int) *Server {
 
 	mux.HandleFunc("/health", s.healthHandler)
 	mux.HandleFunc("/ready", s.readyHandler)
+	mux.HandleFunc("/metrics", s.metricsHandler)
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	s.server = &http.Server{
@@ -161,4 +162,12 @@ func statusString(ok bool) string {
 		return "ok"
 	}
 	return "fail"
+}
+
+func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	metrics := GetMetrics()
+	json.NewEncoder(w).Encode(metrics)
 }

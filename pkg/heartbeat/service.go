@@ -234,6 +234,14 @@ func (hs *HeartbeatService) buildPrompt() string {
 		return ""
 	}
 
+	statePath := filepath.Join(hs.workspace, "heartbeat-state.json")
+	var stateContext string
+	if stateData, err := os.ReadFile(statePath); err == nil {
+		stateContext = fmt.Sprintf("\n## Current Task State (heartbeat-state.json)\n```json\n%s\n```\nTo enforce task cooldowns, check the timestamps above. To update a timestamp, use the filesystem tool to save the new state to `heartbeat-state.json`.\n", string(stateData))
+	} else {
+		stateContext = "\n## Current Task State (heartbeat-state.json)\n(File does not exist yet. You can use the filesystem tool to create it and store execution timestamps to enforce task cooldowns.)\n"
+	}
+
 	now := time.Now().Format("2006-01-02 15:04:05")
 	return fmt.Sprintf(`# Heartbeat Check
 
@@ -244,7 +252,8 @@ Review the following tasks and execute any necessary actions using available ski
 If there is nothing that requires attention, respond ONLY with: HEARTBEAT_OK
 
 %s
-`, now, content)
+%s
+`, now, stateContext, content)
 }
 
 // createDefaultHeartbeatTemplate creates the default HEARTBEAT.md file
@@ -264,6 +273,8 @@ This file contains tasks for the heartbeat service to check periodically.
 ## Instructions
 
 - Execute ALL tasks listed below. Do NOT skip any task.
+- For tasks with cooldowns (e.g., "every 4 hours"), check the "heartbeat-state.json" section above before running. If the cooldown hasn't passed, skip it.
+- When you execute a task with a cooldown, use your tools to update the timestamp in "heartbeat-state.json".
 - For simple tasks (e.g., report current time), respond directly.
 - For complex tasks that may take time, use the spawn tool to create a subagent.
 - The spawn tool is async - subagent results will be sent to the user automatically.

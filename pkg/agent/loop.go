@@ -20,6 +20,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/channels"
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/constants"
+	"github.com/sipeed/picoclaw/pkg/health"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/routing"
@@ -259,6 +260,31 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 			"sender_id":   msg.SenderID,
 			"session_key": msg.SessionKey,
 		})
+
+	// Simple Prompt Injection Detection
+	lowerContent := strings.ToLower(msg.Content)
+	if strings.Contains(lowerContent, "ignore previous") ||
+		strings.Contains(lowerContent, "disregard your") ||
+		strings.Contains(lowerContent, "new instructions:") {
+
+		logger.WarnCF("security", "Potential prompt injection detected", map[string]interface{}{
+			"sender_id": msg.SenderID,
+			"channel":   msg.Channel,
+			"content":   logContent,
+		})
+
+		if msg.Channel != "system" {
+			response := "I cannot process requests that attempt to override my core instructions."
+			if !constants.IsInternalChannel(msg.Channel) {
+				al.bus.PublishOutbound(bus.OutboundMessage{
+					Channel: msg.Channel,
+					ChatID:  msg.ChatID,
+					Content: response,
+				})
+			}
+			return response, nil
+		}
+	}
 
 	// Route system messages to processSystemMessage
 	if msg.Channel == "system" {
@@ -517,6 +543,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		// Retry loop for context/token errors
 		maxRetries := 2
 		for retry := 0; retry <= maxRetries; retry++ {
+			health.RecordLLMCall()
+			health.RecordTokens(al.estimateTokens(messages))
 			response, err = callLLM()
 			if err == nil {
 				break
@@ -599,6 +627,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		}
 
 		if err != nil {
+			health.RecordError()
 			logger.ErrorCF("agent", "LLM call failed",
 				map[string]interface{}{
 					"agent_id":  agent.ID,
@@ -697,6 +726,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				}
 			}
 
+			health.RecordToolExecution(tc.Name)
 			toolResult := agent.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
 
 			// Send ForUser content to user immediately if not Silent
