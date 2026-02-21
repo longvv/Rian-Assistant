@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
-      "model": "mistral-small-3.1-24b-instruct:free",
+      "model": "qwen3-coder:free",
       "restrict_to_workspace": true,
       "max_tokens": 8192,
       "max_tool_iterations": 20
@@ -10,8 +10,8 @@
   },
   "model_list": [
     {
-      "model_name": "qwen3-next-80b-a3b-instruct:free",
-      "model": "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
+      "model_name": "qwen3-coder:free",
+      "model": "openrouter/qwen/qwen3-coder:free",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key": "${OPENROUTER_API_KEY}"
     },
