@@ -146,6 +146,10 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
+// telegramRawLimit is a conservative raw-markdown limit per chunk.
+// Telegram's API cap is 4096 HTML chars; we leave headroom for tag expansion.
+const telegramRawLimit = 3500
+
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	if !c.IsRunning() {
 		return fmt.Errorf("telegram bot not running")
@@ -164,30 +168,40 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		c.stopThinking.Delete(msg.ChatID)
 	}
 
-	htmlContent := markdownToTelegramHTML(msg.Content)
-
-	// Try to edit placeholder
-	if pID, ok := c.placeholders.Load(msg.ChatID); ok {
-		c.placeholders.Delete(msg.ChatID)
-		editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
-		editMsg.ParseMode = telego.ModeHTML
-
-		if _, err = c.bot.EditMessageText(ctx, editMsg); err == nil {
-			return nil
-		}
-		// Fallback to new message if edit fails
+	chunks := utils.SplitMessage(msg.Content, telegramRawLimit)
+	if len(chunks) == 0 {
+		chunks = []string{msg.Content}
 	}
 
-	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
-	tgMsg.ParseMode = telego.ModeHTML
+	for i, chunk := range chunks {
+		htmlContent := markdownToTelegramHTML(chunk)
 
-	if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]interface{}{
-			"error": err.Error(),
-		})
-		tgMsg.ParseMode = ""
-		_, err = c.bot.SendMessage(ctx, tgMsg)
-		return err
+		// For the first chunk, try to edit the placeholder if one exists
+		if i == 0 {
+			if pID, ok := c.placeholders.Load(msg.ChatID); ok {
+				c.placeholders.Delete(msg.ChatID)
+				editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
+				editMsg.ParseMode = telego.ModeHTML
+
+				if _, err = c.bot.EditMessageText(ctx, editMsg); err == nil {
+					continue
+				}
+				// Fallback to new message if edit fails
+			}
+		}
+
+		tgMsg := tu.Message(tu.ID(chatID), htmlContent)
+		tgMsg.ParseMode = telego.ModeHTML
+
+		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
+			logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]interface{}{
+				"error": err.Error(),
+			})
+			tgMsg.ParseMode = ""
+			if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
