@@ -11,6 +11,12 @@
   },
   "model_list": [
     {
+      "model_name": "claude-sonnet-4-6",
+      "model": "anthropic/claude-sonnet-4-6",
+      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}",
+      "api_base": "https://api.anthropic.com/v1"
+    },
+    {
       "model_name": "gpt4",
       "model": "openai/gpt-5.2",
       "api_key": "sk-your-openai-key",

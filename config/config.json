@@ -10,12 +10,6 @@
   },
   "model_list": [
     {
-      "model_name": "claude-sonnet-4-6",
-      "model": "anthropic/claude-sonnet-4-6",
-      "api_key": "${PICOCLAW_PROVIDERS_ANTHROPIC_API_KEY}",
-      "api_base": "https://api.anthropic.com/v1"
-    },
-    {
       "model_name": "qwen3-next-80b-a3b-instruct:free",
       "model": "openrouter/qwen/qwen3-next-80b-a3b-instruct:free",
       "api_key": "${OPENROUTER_API_KEY}"
