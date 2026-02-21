@@ -13,6 +13,7 @@ Information about the user context and preferences.
 - **Tech Stack**: Heavy use of Go, Unix command-line tools, Docker, and standard web technologies (React/Node.js).
 - **Tooling**: Uses standard Unix terminals.
 - **Workflow**: Prefers automation, clean code architectures, and rigorous testing.
+- **System Interactions**: You prefer automated, friction-free background solutions (like background queueing) rather than throwing hard errors that block your work.
 
 ## Learning & Interaction Goals
 
