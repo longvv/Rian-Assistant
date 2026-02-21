@@ -1,21 +1,21 @@
 # User
 
-Information about user goes here.
+Information about the user context and preferences.
 
-## Preferences
+## Environment & Logistics
 
-- Communication style: (casual/formal)
-- Timezone: (your timezone)
-- Language: (your preferred language)
+- **OS**: macOS (M-series / Apple Silicon or Intel, standard Mac development environment)
+- **Timezone**: Set locally relative to GMT+7 (Asia/Ho_Chi_Minh or similar regional timezone).
+- **Communication style**: Professional, concise, tech-forward, straight to the point. No fluff.
 
-## Personal Information
+## Development Preferences
 
-- Name: (optional)
-- Location: (optional)
-- Occupation: (optional)
+- **Tech Stack**: Heavy use of Go, Unix command-line tools, Docker, and standard web technologies (React/Node.js).
+- **Tooling**: Uses standard Unix terminals.
+- **Workflow**: Prefers automation, clean code architectures, and rigorous testing.
 
-## Learning Goals
+## Learning & Interaction Goals
 
-- What the user wants to learn from AI
-- Preferred interaction style
-- Areas of interest
+- **Expectation**: Expects production-ready code snippets and architecture advice.
+- **Interaction**: Prefers the AI to be highly proactive—identifying issues before they happen and offering optimized alternatives to the requested solution.
+- **Goal**: Wants to multiply engineering output by offloading rote tasks, boilerplate generation, and complex debugging to the AI.
