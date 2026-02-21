@@ -32,6 +32,8 @@ metadata:
 
 Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
 
+**Rate Limits:** If you encounter an API rate limit or secondary rate limit (e.g., `HTTP 403/429` with `retry-after`), **DO NOT FAIL**. Use the \`queue-manager\` skill (\`scripts/enqueue.sh\`) to queue your command and notify the user it was queued.
+
 ## Exploring Repositories
 
 View repository details:

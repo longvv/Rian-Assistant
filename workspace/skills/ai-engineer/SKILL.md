@@ -1,5 +1,5 @@
 ---
-name: AI Engineer
+name: ai-engineer
 description: Specialized persona for advanced code review, refactoring, and software architecture.
 version: 1.0.0
 ---
