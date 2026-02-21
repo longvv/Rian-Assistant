@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
-      "model": "lfm-2.5-1.2b-thinking:free",
+      "model": "liquid/lfm-2.5-1.2b-thinking:free",
       "restrict_to_workspace": true,
       "max_tokens": 8192,
       "max_tool_iterations": 20
@@ -16,8 +16,8 @@
       "api_base": "https://api.anthropic.com/v1"
     },
     {
-      "model_name": "lfm-2.5-1.2b-thinking:free",
-      "model": "openrouter/lfm-2.5-1.2b-thinking:free",
+      "model_name": "liquid/lfm-2.5-1.2b-thinking:free",
+      "model": "openrouter/liquid/lfm-2.5-1.2b-thinking:free",
       "api_key": "${OPENROUTER_API_KEY}",
       "api_base": "https://openrouter.ai/api/v1"
     }
