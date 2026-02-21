@@ -175,8 +175,12 @@ type AgentDefaults struct {
 	ImageModel          string   `json:"image_model,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_IMAGE_MODEL"`
 	ImageModelFallbacks []string `json:"image_model_fallbacks,omitempty"`
 	MaxTokens           int      `json:"max_tokens" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
-	Temperature         *float64 `json:"temperature,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations   int      `json:"max_tool_iterations" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	// ContextWindow is the model's total input context size in tokens.
+	// Used to determine when to trigger proactive conversation summarization.
+	// Defaults to 128000 if not set. This is separate from MaxTokens (output budget).
+	ContextWindow     int      `json:"context_window,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
+	Temperature       *float64 `json:"temperature,omitempty" env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
+	MaxToolIterations int      `json:"max_tool_iterations" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
 }
 
 type ChannelsConfig struct {

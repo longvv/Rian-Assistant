@@ -88,6 +88,14 @@ func NewAgentInstance(
 		temperature = *defaults.Temperature
 	}
 
+	// ContextWindow is the model's total input context size.
+	// It controls when proactive summarization fires (at 75% of this value).
+	// Fall back to 128000 if not configured; never use MaxTokens (output budget) here.
+	contextWindow := defaults.ContextWindow
+	if contextWindow <= 0 {
+		contextWindow = 128000
+	}
+
 	// Resolve fallback candidates
 	modelCfg := providers.ModelConfig{
 		Primary:   model,
@@ -104,7 +112,7 @@ func NewAgentInstance(
 		MaxIterations:  maxIter,
 		MaxTokens:      maxTokens,
 		Temperature:    temperature,
-		ContextWindow:  maxTokens,
+		ContextWindow:  contextWindow,
 		Provider:       provider,
 		Sessions:       sessionsManager,
 		ContextBuilder: contextBuilder,

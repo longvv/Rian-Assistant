@@ -843,24 +843,27 @@ func (al *AgentLoop) updateToolContexts(agent *AgentInstance, channel, chatID st
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
+// The history snapshot is captured before launching the goroutine to avoid a race
+// where the goroutine reads a stale (already-extended) message list.
 func (al *AgentLoop) maybeSummarize(agent *AgentInstance, sessionKey, channel, chatID string) {
-	newHistory := agent.Sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
+	historySnapshot := agent.Sessions.GetHistory(sessionKey)
+	tokenEstimate := al.estimateTokens(historySnapshot)
 	threshold := agent.ContextWindow * 75 / 100
 
-	if len(newHistory) > 20 || tokenEstimate > threshold {
+	if len(historySnapshot) > 20 || tokenEstimate > threshold {
 		summarizeKey := agent.ID + ":" + sessionKey
 		if _, loading := al.summarizing.LoadOrStore(summarizeKey, true); !loading {
+			// Log internally — do NOT send a chat message; it is disruptive and looks
+			// like an error to the user every time summarization triggers.
+			logger.InfoCF("agent", "Summarization triggered", map[string]interface{}{
+				"session_key":    sessionKey,
+				"history_len":    len(historySnapshot),
+				"token_estimate": tokenEstimate,
+				"threshold":      threshold,
+			})
 			go func() {
 				defer al.summarizing.Delete(summarizeKey)
-				if !constants.IsInternalChannel(channel) {
-					al.bus.PublishOutbound(bus.OutboundMessage{
-						Channel: channel,
-						ChatID:  chatID,
-						Content: "Memory threshold reached. Optimizing conversation history...",
-					})
-				}
-				al.summarizeSession(agent, sessionKey)
+				al.summarizeSession(agent, sessionKey, historySnapshot)
 			}()
 		}
 	}
@@ -1023,12 +1026,13 @@ func formatToolsForLog(tools []providers.ToolDefinition) string {
 	return result
 }
 
-// summarizeSession summarizes the conversation history for a session.
-func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
+// summarizeSession summarizes a captured snapshot of the conversation history.
+// The snapshot must be passed in by the caller (captured before goroutine launch)
+// to avoid a race where the goroutine reads a stale, already-extended message list.
+func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string, history []providers.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	history := agent.Sessions.GetHistory(sessionKey)
 	summary := agent.Sessions.GetSummary(sessionKey)
 
 	// Keep last 4 messages for continuity
@@ -1039,12 +1043,14 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 	toSummarize := history[:len(history)-4]
 
 	// Oversized Message Guard
+	// Include user, assistant, AND tool messages so tool-heavy conversations
+	// (e.g. multi-step web research) are faithfully summarized.
 	maxMessageTokens := agent.ContextWindow / 2
 	validMessages := make([]providers.Message, 0)
 	omitted := false
 
 	for _, m := range toSummarize {
-		if m.Role != "user" && m.Role != "assistant" {
+		if m.Role != "user" && m.Role != "assistant" && m.Role != "tool" {
 			continue
 		}
 		msgTokens := len(m.Content) / 2
@@ -1089,12 +1095,34 @@ func (al *AgentLoop) summarizeSession(agent *AgentInstance, sessionKey string) {
 
 	if finalSummary != "" {
 		agent.Sessions.SetSummary(sessionKey, finalSummary)
-		agent.Sessions.TruncateHistory(sessionKey, 4)
+
+		// Build the replacement history:
+		//   - Keep the last 4 messages of the captured snapshot for conversational continuity.
+		//   - Append any messages that were added to the live session AFTER the snapshot
+		//     was taken (e.g. a new user message that arrived while we were summarizing).
+		// This is race-safe: GetHistory returns a copy, and SetHistory does a deep copy-in.
+		snapshotTail := history[len(history)-4:]
+		liveHistory := agent.Sessions.GetHistory(sessionKey)
+		var postSnapshot []providers.Message
+		if len(liveHistory) > len(history) {
+			postSnapshot = liveHistory[len(history):]
+		}
+		newHistory := make([]providers.Message, 0, len(snapshotTail)+len(postSnapshot))
+		newHistory = append(newHistory, snapshotTail...)
+		newHistory = append(newHistory, postSnapshot...)
+		agent.Sessions.SetHistory(sessionKey, newHistory)
 		agent.Sessions.Save(sessionKey)
+		logger.InfoCF("agent", "Summarization completed", map[string]interface{}{
+			"session_key":   sessionKey,
+			"kept_snapshot": len(snapshotTail),
+			"kept_new_msgs": len(postSnapshot),
+		})
 	}
 }
 
 // summarizeBatch summarizes a batch of messages.
+// It handles user, assistant, and tool messages. Tool result messages are labelled
+// with their role so the summary captures research/action outcomes.
 func (al *AgentLoop) summarizeBatch(ctx context.Context, agent *AgentInstance, batch []providers.Message, existingSummary string) (string, error) {
 	prompt := "Provide a concise summary of this conversation segment, preserving core context and key points.\n"
 	if existingSummary != "" {
@@ -1102,7 +1130,13 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, agent *AgentInstance, b
 	}
 	prompt += "\nCONVERSATION:\n"
 	for _, m := range batch {
-		prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
+		switch m.Role {
+		case "user", "assistant":
+			prompt += fmt.Sprintf("%s: %s\n", m.Role, m.Content)
+		case "tool":
+			// Label tool results so the summary captures research outcomes
+			prompt += fmt.Sprintf("tool_result: %s\n", m.Content)
+		}
 	}
 
 	response, err := agent.Provider.Chat(ctx, []providers.Message{{Role: "user", Content: prompt}}, nil, agent.Model, map[string]interface{}{
@@ -1119,6 +1153,8 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, agent *AgentInstance, b
 // Uses a CJK-aware heuristic:
 // - ASCII characters: ~4 chars per token
 // - Non-ASCII (CJK/Unicode): ~1.5 tokens per char
+// Tool call arguments in assistant messages are also counted to avoid
+// underestimating context when the agent performs many tool calls.
 func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
 	tokens := 0.0
 	for _, m := range messages {
@@ -1129,6 +1165,14 @@ func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
 				tokens += 0.25 // 4 chars/token
 			} else {
 				tokens += 1.5 // 1.5 tokens/char for CJK
+			}
+		}
+		// Count tool call argument bytes for assistant messages.
+		// Arguments are stored in ToolCalls, not in Content, so they were
+		// previously invisible to the estimator.
+		for _, tc := range m.ToolCalls {
+			if tc.Function != nil {
+				tokens += float64(len(tc.Function.Arguments)) * 0.25
 			}
 		}
 	}

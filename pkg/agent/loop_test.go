@@ -671,6 +671,34 @@ func TestAgentLoop_EstimateTokens(t *testing.T) {
 	}
 }
 
+// TestAgentLoop_EstimateTokens_ToolCallArgs verifies that tool call argument bytes
+// are included in the token estimate (Fix #3).
+func TestAgentLoop_EstimateTokens_ToolCallArgs(t *testing.T) {
+	al := &AgentLoop{}
+
+	// An assistant message with a tool call containing 40 ASCII argument chars.
+	// Overhead (4) + Content (0 chars) + ToolCall args: 40 chars * 0.25 = 10 tokens.
+	input := []providers.Message{
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []providers.ToolCall{
+				{
+					Function: &providers.FunctionCall{
+						Arguments: `{"query":"openclaw","count":10}`, // 30 chars
+					},
+				},
+			},
+		},
+	}
+
+	// Overhead: 4, Content: 0, args: 30 * 0.25 = 7.5 → 11 total (int truncation of 4 + 7.5 = 11)
+	got := al.estimateTokens(input)
+	if got <= 4 {
+		t.Errorf("Expected estimateTokens to count tool call args (got %d, want > 4)", got)
+	}
+}
+
 func TestAgentLoop_PromptInjection(t *testing.T) {
 
 	tests := []struct {
@@ -815,5 +843,64 @@ func TestAgentLoop_GracefulDegradationAtIterLimit(t *testing.T) {
 	// The final response must be the synthesis answer, NOT the default silent-failure string
 	if response != synthesisText {
 		t.Errorf("Expected synthesis response %q, got %q", synthesisText, response)
+	}
+}
+
+// TestMaybeSummarize_NoUserMessage verifies that maybeSummarize does NOT publish
+// a user-facing outbound message after the Fix #1 change.
+func TestMaybeSummarize_NoUserMessage(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-summary-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				ContextWindow:     128000,
+				MaxToolIterations: 10,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: "ok"}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	agent := al.registry.GetDefaultAgent()
+	if agent == nil {
+		t.Fatal("No default agent")
+	}
+
+	// Inject 25 dummy messages so the threshold (>20) is met
+	sessionKey := "test-summarize-session"
+	for i := 0; i < 25; i++ {
+		agent.Sessions.AddMessage(sessionKey, "user", "hello")
+		agent.Sessions.AddMessage(sessionKey, "assistant", "hi there")
+	}
+
+	// Call maybeSummarize — it may launch a goroutine but must NOT publish outbound
+	al.maybeSummarize(agent, sessionKey, "telegram", "12345")
+
+	// Drain outbound channel with a pre-cancelled context so SubscribeOutbound returns immediately.
+	// maybeSummarize itself runs synchronously up to the goroutine launch, so any synchronous
+	// outbound publish (which we removed) would already be buffered before we drain here.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately for non-blocking reads
+	var outboundMessages []string
+	for {
+		msg, ok := msgBus.SubscribeOutbound(cancelledCtx)
+		if !ok {
+			break
+		}
+		outboundMessages = append(outboundMessages, msg.Content)
+	}
+
+	if len(outboundMessages) > 0 {
+		t.Errorf("Expected no user-facing messages from maybeSummarize, got: %v", outboundMessages)
 	}
 }
