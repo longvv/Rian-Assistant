@@ -146,9 +146,11 @@ func (c *TelegramChannel) Stop(ctx context.Context) error {
 	return nil
 }
 
-// telegramRawLimit is a conservative raw-markdown limit per chunk.
-// Telegram's API cap is 4096 HTML chars; we leave headroom for tag expansion.
-const telegramRawLimit = 3500
+// telegramHTMLLimit is Telegram's hard per-message character limit for text messages.
+const telegramHTMLLimit = 4096
+
+// telegramCaptionLimit is the max caption length for Telegram documents (API limit: 1024).
+const telegramCaptionLimit = 900
 
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	if !c.IsRunning() {
@@ -168,43 +170,81 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		c.stopThinking.Delete(msg.ChatID)
 	}
 
-	chunks := utils.SplitMessage(msg.Content, telegramRawLimit)
-	if len(chunks) == 0 {
-		chunks = []string{msg.Content}
+	// Convert markdown to HTML once — its length determines which path we take.
+	htmlContent := markdownToTelegramHTML(msg.Content)
+	fits := len(htmlContent) <= telegramHTMLLimit
+
+	if pID, ok := c.placeholders.Load(msg.ChatID); ok {
+		c.placeholders.Delete(msg.ChatID)
+		if fits {
+			// Short enough: edit the placeholder in-place
+			editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
+			editMsg.ParseMode = telego.ModeHTML
+			if _, err = c.bot.EditMessageText(ctx, editMsg); err == nil {
+				return nil
+			}
+			// Edit failed — fall through to send as a new message below
+		} else {
+			// Too long for a text message: remove the placeholder then send as a file
+			_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+				ChatID:    tu.ID(chatID),
+				MessageID: pID.(int),
+			})
+		}
 	}
 
-	for i, chunk := range chunks {
-		htmlContent := markdownToTelegramHTML(chunk)
+	if !fits {
+		return c.sendAsMarkdownFile(ctx, chatID, msg.Content)
+	}
 
-		// For the first chunk, try to edit the placeholder if one exists
-		if i == 0 {
-			if pID, ok := c.placeholders.Load(msg.ChatID); ok {
-				c.placeholders.Delete(msg.ChatID)
-				editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
-				editMsg.ParseMode = telego.ModeHTML
+	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
+	tgMsg.ParseMode = telego.ModeHTML
 
-				if _, err = c.bot.EditMessageText(ctx, editMsg); err == nil {
-					continue
-				}
-				// Fallback to new message if edit fails
-			}
-		}
-
-		tgMsg := tu.Message(tu.ID(chatID), htmlContent)
-		tgMsg.ParseMode = telego.ModeHTML
-
-		if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-			logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]interface{}{
-				"error": err.Error(),
-			})
-			tgMsg.ParseMode = ""
-			if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
-				return err
-			}
-		}
+	if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
+		logger.ErrorCF("telegram", "HTML parse failed, falling back to plain text", map[string]interface{}{
+			"error": err.Error(),
+		})
+		tgMsg.ParseMode = ""
+		_, err = c.bot.SendMessage(ctx, tgMsg)
+		return err
 	}
 
 	return nil
+}
+
+// sendAsMarkdownFile sends content as a response.md document with a short caption preview.
+func (c *TelegramChannel) sendAsMarkdownFile(ctx context.Context, chatID int64, content string) error {
+	caption := buildCaption(content, telegramCaptionLimit)
+	htmlCaption := markdownToTelegramHTML(caption)
+
+	docParams := tu.Document(tu.ID(chatID), tu.FileFromBytes([]byte(content), "response.md"))
+	docParams.Caption = htmlCaption
+	docParams.ParseMode = telego.ModeHTML
+
+	if _, err := c.bot.SendDocument(ctx, docParams); err != nil {
+		logger.ErrorCF("telegram", "Failed to send markdown file, falling back to plain text caption", map[string]interface{}{
+			"error": err.Error(),
+		})
+		docParams.Caption = caption
+		docParams.ParseMode = ""
+		_, err = c.bot.SendDocument(ctx, docParams)
+		return err
+	}
+	return nil
+}
+
+// buildCaption returns the first line(s) of content up to maxLen, appending "…" if truncated.
+func buildCaption(content string, maxLen int) string {
+	content = strings.TrimSpace(content)
+	if len(content) <= maxLen {
+		return content
+	}
+	// Try to break at the last newline within the limit
+	cut := content[:maxLen]
+	if idx := strings.LastIndexByte(cut, '\n'); idx > maxLen/2 {
+		cut = cut[:idx]
+	}
+	return cut + "\n…"
 }
 
 func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Message) error {
