@@ -135,6 +135,15 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
 
+	// Start periodic session cleanup for every agent instance so expired
+	// sessions are evicted from memory during long-running processes, not only
+	// at startup.
+	for _, id := range al.registry.ListAgentIDs() {
+		if agent, ok := al.registry.GetAgent(id); ok {
+			agent.Sessions.StartPeriodicCleanup(ctx, 30*time.Minute)
+		}
+	}
+
 	for al.running.Load() {
 		select {
 		case <-ctx.Done():

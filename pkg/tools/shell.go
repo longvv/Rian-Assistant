@@ -9,10 +9,17 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 )
+
+// bufPool reuses bytes.Buffer allocations across shell executions to reduce
+// GC pressure when many commands are run in rapid succession.
+var bufPool = sync.Pool{
+	New: func() interface{} { return new(bytes.Buffer) },
+}
 
 type ExecTool struct {
 	workingDir          string
@@ -176,9 +183,22 @@ func (t *ExecTool) Execute(ctx context.Context, args map[string]interface{}) *To
 		cmd.Dir = cwd
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := bufPool.Get().(*bytes.Buffer)
+	stderr := bufPool.Get().(*bytes.Buffer)
+	stdout.Reset()
+	stderr.Reset()
+	defer func() {
+		// Cap pooled buffers so very large command outputs don't keep giant
+		// byte slices alive across the lifetime of the pool.
+		if stdout.Cap() <= 1<<20 { // 1 MiB
+			bufPool.Put(stdout)
+		}
+		if stderr.Cap() <= 1<<20 {
+			bufPool.Put(stderr)
+		}
+	}()
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	err := cmd.Run()
 	output := stdout.String()

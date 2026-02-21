@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -39,6 +40,38 @@ func NewSessionManager(storage string) *SessionManager {
 	}
 
 	return sm
+}
+
+// StartPeriodicCleanup launches a background goroutine that evicts expired
+// in-memory sessions every interval. It stops when ctx is cancelled.
+// This prevents unbounded memory growth in long-running processes where
+// loadSessions (startup-only TTL check) is never re-run.
+func (sm *SessionManager) StartPeriodicCleanup(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sm.evictExpired()
+			}
+		}
+	}()
+}
+
+func (sm *SessionManager) evictExpired() {
+	if sm.ttl <= 0 {
+		return
+	}
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	for key, s := range sm.sessions {
+		if time.Since(s.Updated) > sm.ttl {
+			delete(sm.sessions, key)
+		}
+	}
 }
 
 func (sm *SessionManager) GetOrCreate(key string) *Session {
@@ -143,7 +176,12 @@ func (sm *SessionManager) TruncateHistory(key string, keepLast int) {
 		return
 	}
 
-	session.Messages = session.Messages[len(session.Messages)-keepLast:]
+	// Copy to a new backing array so the dropped elements can be GC'd.
+	// A plain reslice keeps the original array alive despite the smaller len.
+	tail := session.Messages[len(session.Messages)-keepLast:]
+	fresh := make([]providers.Message, keepLast)
+	copy(fresh, tail)
+	session.Messages = fresh
 	session.Updated = time.Now()
 }
 
@@ -284,6 +322,7 @@ func (sm *SessionManager) loadSessions() error {
 // messages, the whole group is dropped. This repairs sessions corrupted by
 // crashes or rate-limit interruptions mid-iteration.
 func sanitizeMessages(msgs []providers.Message) []providers.Message {
+	original := msgs
 	for {
 		if len(msgs) == 0 {
 			break
@@ -301,6 +340,13 @@ func sanitizeMessages(msgs []providers.Message) []providers.Message {
 		}
 		// Any other tail (user message, assistant without tool_calls) is fine.
 		break
+	}
+	// If elements were trimmed, copy to a new backing array so the dropped
+	// Message values (including their string fields) can be GC'd.
+	if len(msgs) < len(original) {
+		compact := make([]providers.Message, len(msgs))
+		copy(compact, msgs)
+		return compact
 	}
 	return msgs
 }

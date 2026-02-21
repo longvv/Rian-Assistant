@@ -22,6 +22,11 @@ type SubagentTask struct {
 	Created       int64
 }
 
+// completedTaskTTL is how long a finished/failed/cancelled task is kept in
+// memory before being evicted. Keeping results for a short window lets callers
+// poll status after completion, while preventing unbounded growth.
+const completedTaskTTL = 10 * time.Minute
+
 type SubagentManager struct {
 	tasks          map[string]*SubagentTask
 	mu             sync.RWMutex
@@ -79,6 +84,8 @@ func (sm *SubagentManager) RegisterTool(tool Tool) {
 func (sm *SubagentManager) Spawn(ctx context.Context, task, label, agentID, originChannel, originChatID string, callback AsyncCallback) (string, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+
+	sm.evictCompleted()
 
 	taskID := fmt.Sprintf("subagent-%d", sm.nextID)
 	sm.nextID++
@@ -223,6 +230,10 @@ func (sm *SubagentManager) GetTask(taskID string) (*SubagentTask, bool) {
 }
 
 func (sm *SubagentManager) ListTasks() []*SubagentTask {
+	sm.mu.Lock()
+	sm.evictCompleted()
+	sm.mu.Unlock()
+
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -231,6 +242,17 @@ func (sm *SubagentManager) ListTasks() []*SubagentTask {
 		tasks = append(tasks, task)
 	}
 	return tasks
+}
+
+// evictCompleted removes finished tasks whose results are older than
+// completedTaskTTL. Must be called with sm.mu held (write lock).
+func (sm *SubagentManager) evictCompleted() {
+	cutoff := time.Now().Add(-completedTaskTTL).UnixMilli()
+	for id, t := range sm.tasks {
+		if t.Status != "running" && t.Created < cutoff {
+			delete(sm.tasks, id)
+		}
+	}
 }
 
 // SubagentTool executes a subagent task synchronously and returns the result.
