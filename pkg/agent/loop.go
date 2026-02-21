@@ -767,6 +767,58 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		}
 	}
 
+	// If the loop exhausted all iterations without a direct answer, attempt a
+	// forced synthesis: one final LLM call with no tools, asking the model to
+	// summarise everything it gathered and give the user a best-effort answer.
+	// This prevents the "I've completed processing but have no response" silent failure.
+	if finalContent == "" && len(messages) > 1 {
+		logger.WarnCF("agent", "Iteration limit hit with no direct answer; attempting synthesis",
+			map[string]interface{}{
+				"agent_id":   agent.ID,
+				"iterations": iteration,
+			})
+
+		// Notify the user we're wrapping up, but only on external channels
+		if !constants.IsInternalChannel(opts.Channel) {
+			al.bus.PublishOutbound(bus.OutboundMessage{
+				Channel: opts.Channel,
+				ChatID:  opts.ChatID,
+				Content: "⚠️ I've reached my tool call limit. Summarising what I found...",
+			})
+		}
+
+		// Append a system note forcing the model to synthesise from existing context
+		synthesisNote := providers.Message{
+			Role:    "user",
+			Content: "[System: You have reached the maximum number of tool calls. Do NOT call any more tools. Based solely on the tool results above, provide the best possible answer to the user's original question right now.]",
+		}
+		synthesisMessages := append(messages, synthesisNote)
+
+		// Call LLM with no tools to force a direct text response
+		health.RecordLLMCall()
+		health.RecordTokens(al.estimateTokens(synthesisMessages))
+		synthResp, synthErr := agent.Provider.Chat(ctx, synthesisMessages, nil, agent.Model, map[string]interface{}{
+			"max_tokens":  agent.MaxTokens,
+			"temperature": agent.Temperature,
+		})
+		if synthErr == nil && synthResp != nil && synthResp.Content != "" {
+			finalContent = synthResp.Content
+			logger.InfoCF("agent", "Synthesis response obtained",
+				map[string]interface{}{
+					"agent_id":      agent.ID,
+					"content_chars": len(finalContent),
+				})
+		} else {
+			if synthErr != nil {
+				logger.WarnCF("agent", "Synthesis call failed", map[string]interface{}{
+					"agent_id": agent.ID,
+					"error":    synthErr.Error(),
+				})
+			}
+			finalContent = "I wasn't able to find a definitive answer within my tool call limit. Please try rephrasing your question or ask me to search for something more specific."
+		}
+	}
+
 	return finalContent, iteration, nil
 }
 

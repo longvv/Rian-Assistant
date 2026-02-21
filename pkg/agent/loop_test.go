@@ -739,3 +739,81 @@ func TestAgentLoop_PromptInjection(t *testing.T) {
 		})
 	}
 }
+
+// alwaysToolCallProvider always returns a tool call, simulating an infinite-loop agent.
+// On the final call (when no tools are passed — the synthesis call) it returns a direct answer.
+type alwaysToolCallProvider struct {
+	callsWithTools    int
+	synthesisResponse string
+}
+
+func (m *alwaysToolCallProvider) Chat(ctx context.Context, messages []providers.Message, toolDefs []providers.ToolDefinition, model string, opts map[string]interface{}) (*providers.LLMResponse, error) {
+	// When tools slice is nil/empty this is the synthesis call — return a direct answer
+	if len(toolDefs) == 0 {
+		return &providers.LLMResponse{
+			Content:   m.synthesisResponse,
+			ToolCalls: []providers.ToolCall{},
+		}, nil
+	}
+	// Otherwise keep requesting the same dummy tool call
+	m.callsWithTools++
+	return &providers.LLMResponse{
+		Content: "",
+		ToolCalls: []providers.ToolCall{
+			{
+				ID:   fmt.Sprintf("call_%d", m.callsWithTools),
+				Type: "function",
+				Name: "web_search",
+				Function: &providers.FunctionCall{
+					Name:      "web_search",
+					Arguments: `{"query":"gold price","count":5}`,
+				},
+			},
+		},
+	}, nil
+}
+
+func (m *alwaysToolCallProvider) GetDefaultModel() string { return "mock-loop-model" }
+
+// TestAgentLoop_GracefulDegradationAtIterLimit verifies that when MaxIterations is
+// exhausted without a direct answer, the agent performs one synthesis LLM call and
+// returns its content instead of the default silent failure string.
+func TestAgentLoop_GracefulDegradationAtIterLimit(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	const maxIter = 3 // keep the test fast
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: maxIter,
+			},
+		},
+	}
+
+	const synthesisText = "Based on my research, gold is trading around $2,900/oz."
+	msgBus := bus.NewMessageBus()
+	loopProvider := &alwaysToolCallProvider{synthesisResponse: synthesisText}
+	al := NewAgentLoop(cfg, msgBus, loopProvider)
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "current gold price today", "test-session-synth", "cli", "direct")
+	if err != nil {
+		t.Fatalf("Expected no error, got: %v", err)
+	}
+
+	// The agent must have looped exactly MaxIterations times with tools
+	if loopProvider.callsWithTools != maxIter {
+		t.Errorf("Expected %d tool calls, got %d", maxIter, loopProvider.callsWithTools)
+	}
+
+	// The final response must be the synthesis answer, NOT the default silent-failure string
+	if response != synthesisText {
+		t.Errorf("Expected synthesis response %q, got %q", synthesisText, response)
+	}
+}

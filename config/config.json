@@ -2,7 +2,7 @@
   "agents": {
     "defaults": {
       "workspace": "~/.picoclaw/workspace",
-      "model": "nemotron-3-nano-30b:free",
+      "model": "trinity-large-preview:free",
       "restrict_to_workspace": true,
       "max_tokens": 8192,
       "max_tool_iterations": 20
@@ -16,16 +16,10 @@
       "api_key": "${OPENROUTER_API_KEY}"
     },
     {
-      "model_name": "qwen3-coder:free",
-      "model": "openrouter/qwen/qwen3-coder:free",
-      "api_base": "https://openrouter.ai/api/v1",
-      "api_key": "${OPENROUTER_API_KEY}"
-    },
-    {
-      "model_name": "mistral-small-3.1-24b-instruct:free",
-      "model": "openrouter/mistralai/mistral-small-3.1-24b-instruct:free",
-      "api_base": "https://openrouter.ai/api/v1",
-      "api_key": "${OPENROUTER_API_KEY}"
+      "model_name": "trinity-large-preview:free",
+      "model": "openrouter/arcee-ai/trinity-large-preview:free",
+      "api_key": "${PICOCLAW_PROVIDERS_OPENROUTER_API_KEY}",
+      "api_base": "https://openrouter.ai/api/v1"
     }
   ],
   "channels": {
