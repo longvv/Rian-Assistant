@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,9 @@ import (
 	"github.com/sipeed/picoclaw/pkg/state"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
+
+// htmlCommentRe matches HTML block comments (<!-- ... -->) including multiline ones.
+var htmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 const (
 	minIntervalMinutes     = 5
@@ -127,8 +131,11 @@ func (hs *HeartbeatService) runLoop(stopChan chan struct{}) {
 	ticker := time.NewTicker(hs.interval)
 	defer ticker.Stop()
 
-	// Run first heartbeat after initial delay
-	time.AfterFunc(time.Second, func() {
+	// Run first heartbeat after initial delay.
+	// Use 5 minutes to avoid hammering the LLM provider rate limit on boot
+	// before any user requests have had a chance to be served.
+	const initialHeartbeatDelay = 5 * time.Minute
+	time.AfterFunc(initialHeartbeatDelay, func() {
 		hs.executeHeartbeat()
 	})
 
@@ -231,6 +238,15 @@ func (hs *HeartbeatService) buildPrompt() string {
 
 	content := string(data)
 	if len(content) == 0 {
+		return ""
+	}
+
+	// Strip HTML comments (<!-- ... -->) before checking for actionable content.
+	// This allows users to comment out all tasks in HEARTBEAT.md to effectively
+	// disable the heartbeat LLM call without deleting the file.
+	strippedContent := strings.TrimSpace(htmlCommentRe.ReplaceAllString(content, ""))
+	if strippedContent == "" {
+		logger.InfoC("heartbeat", "No heartbeat prompt (HEARTBEAT.md contains only comments)")
 		return ""
 	}
 
