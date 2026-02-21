@@ -540,7 +540,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		}
 
 		// Retry loop for context/token errors
-		maxRetries := 2
+		maxRetries := 5
 		for retry := 0; retry <= maxRetries; retry++ {
 			health.RecordLLMCall()
 			health.RecordTokens(al.estimateTokens(messages))
@@ -559,7 +559,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				strings.Contains(errMsg, "429")
 
 			if isRateLimit && retry < maxRetries {
-				wait := time.Duration(1<<uint(retry)) * time.Second // 1s, 2s
+				wait := time.Duration(1<<uint(retry)) * 5 * time.Second // 5s, 10s, 20s, 40s, 80s
 				logger.WarnCF("agent", "Rate limit hit, backing off", map[string]interface{}{
 					"retry":     retry,
 					"wait_secs": wait.Seconds(),
