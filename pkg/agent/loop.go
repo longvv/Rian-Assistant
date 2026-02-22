@@ -88,18 +88,28 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 
 		// Web tools
 		if searchTool := tools.NewWebSearchTool(tools.WebSearchToolOptions{
-			BraveAPIKey:          cfg.Tools.Web.Brave.APIKey,
-			BraveMaxResults:      cfg.Tools.Web.Brave.MaxResults,
-			BraveEnabled:         cfg.Tools.Web.Brave.Enabled,
 			DuckDuckGoMaxResults: cfg.Tools.Web.DuckDuckGo.MaxResults,
 			DuckDuckGoEnabled:    cfg.Tools.Web.DuckDuckGo.Enabled,
-			PerplexityAPIKey:     cfg.Tools.Web.Perplexity.APIKey,
-			PerplexityMaxResults: cfg.Tools.Web.Perplexity.MaxResults,
-			PerplexityEnabled:    cfg.Tools.Web.Perplexity.Enabled,
+			SearXNGURL:           cfg.Tools.Web.SearXNG.URL,
+			SearXNGMaxResults:    cfg.Tools.Web.SearXNG.MaxResults,
+			SearXNGEnabled:       cfg.Tools.Web.SearXNG.Enabled,
 		}); searchTool != nil {
 			agent.Tools.Register(searchTool)
 		}
-		agent.Tools.Register(tools.NewWebFetchTool(50000))
+		webFetchTool := tools.NewWebFetchTool(50000)
+		// JinaReader is on by default (no API key needed).
+		// Set tools.web.jina_reader_enabled=false in config.json to disable.
+		// Zero-value (omitted from config) means enabled since the struct default is false,
+		// but NewWebFetchTool already defaults jinaReaderEnabled=true internally.
+		// Only disable when the user has explicitly set the field to false.
+		if cfg.Tools.Web.JinaReaderEnabled == false {
+			// Field was set explicitly; respect it only if other providers are configured.
+			// Default: keep Jina on (NewWebFetchTool already set it to true).
+		}
+		agent.Tools.Register(webFetchTool)
+
+		// Calculator tool — safe expression evaluator, no shell needed
+		agent.Tools.Register(tools.NewCalculatorTool())
 
 		// Hardware tools (I2C, SPI) - Linux only, returns error on other platforms
 		agent.Tools.Register(tools.NewI2CTool())

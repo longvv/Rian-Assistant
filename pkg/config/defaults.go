@@ -245,20 +245,16 @@ func DefaultConfig() *Config {
 		},
 		Tools: ToolsConfig{
 			Web: WebToolsConfig{
-				Brave: BraveConfig{
-					Enabled:    false,
-					APIKey:     "",
-					MaxResults: 5,
-				},
 				DuckDuckGo: DuckDuckGoConfig{
 					Enabled:    true,
 					MaxResults: 5,
 				},
-				Perplexity: PerplexityConfig{
+				SearXNG: SearXNGConfig{
 					Enabled:    false,
-					APIKey:     "",
+					URL:        "",
 					MaxResults: 5,
 				},
+				JinaReaderEnabled: true,
 			},
 			Cron: CronToolsConfig{
 				ExecTimeoutMinutes: 5,

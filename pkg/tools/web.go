@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,72 +17,67 @@ const (
 	userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+// ─── Simple LRU fetch cache ───────────────────────────────────────────────────
+// Caches web_fetch results by URL in-memory to avoid redundant HTTP calls
+// during a single response chain. Holds at most fetchCacheMaxSize entries.
+
+const fetchCacheMaxSize = 64
+
+type fetchCacheEntry struct {
+	result string
+	at     time.Time
+}
+
+type fetchCache struct {
+	mu   sync.Mutex
+	keys []string // insertion-order ring for eviction
+	data map[string]fetchCacheEntry
+	ttl  time.Duration
+}
+
+func newFetchCache(ttl time.Duration) *fetchCache {
+	return &fetchCache{
+		keys: make([]string, 0, fetchCacheMaxSize),
+		data: make(map[string]fetchCacheEntry, fetchCacheMaxSize),
+		ttl:  ttl,
+	}
+}
+
+func (c *fetchCache) get(key string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.data[key]
+	if !ok {
+		return "", false
+	}
+	if c.ttl > 0 && time.Since(e.at) > c.ttl {
+		delete(c.data, key)
+		return "", false
+	}
+	return e.result, true
+}
+
+func (c *fetchCache) set(key, value string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.data[key]; !exists {
+		if len(c.keys) >= fetchCacheMaxSize {
+			// Evict oldest
+			evict := c.keys[0]
+			c.keys = c.keys[1:]
+			delete(c.data, evict)
+		}
+		c.keys = append(c.keys, key)
+	}
+	c.data[key] = fetchCacheEntry{result: value, at: time.Now()}
+}
+
+// globalFetchCache is shared across all WebFetchTool instances within a process.
+// TTL of 10 minutes: stale enough to avoid hammering, fresh enough not to mislead.
+var globalFetchCache = newFetchCache(10 * time.Minute)
+
 type SearchProvider interface {
 	Search(ctx context.Context, query string, count int) (string, error)
-}
-
-type BraveSearchProvider struct {
-	apiKey string
-}
-
-func (p *BraveSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
-	searchURL := fmt.Sprintf("https://api.search.brave.com/res/v1/web/search?q=%s&count=%d",
-		url.QueryEscape(query), count)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("X-Subscription-Token", p.apiKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	var searchResp struct {
-		Web struct {
-			Results []struct {
-				Title       string `json:"title"`
-				URL         string `json:"url"`
-				Description string `json:"description"`
-			} `json:"results"`
-		} `json:"web"`
-	}
-
-	if err := json.Unmarshal(body, &searchResp); err != nil {
-		// Log error body for debugging
-		fmt.Printf("Brave API Error Body: %s\n", string(body))
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	results := searchResp.Web.Results
-	if len(results) == 0 {
-		return fmt.Sprintf("No results for: %s", query), nil
-	}
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Results for: %s", query))
-	for i, item := range results {
-		if i >= count {
-			break
-		}
-		lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, item.Title, item.URL))
-		if item.Description != "" {
-			lines = append(lines, fmt.Sprintf("   %s", item.Description))
-		}
-	}
-
-	return strings.Join(lines, "\n"), nil
 }
 
 type DuckDuckGoSearchProvider struct{}
@@ -176,69 +172,93 @@ func stripTags(content string) string {
 	return re.ReplaceAllString(content, "")
 }
 
-type PerplexitySearchProvider struct {
-	apiKey string
+// ─── SearXNG Provider ────────────────────────────────────────────────────────
+
+var defaultSearXNGInstances = []string{
+	"https://searx.be",
+	"https://searx.fyi",
+	"https://searxng.site",
+	"https://search.mdosch.de",
+	"https://searx.sp-codes.de",
 }
 
-func (p *PerplexitySearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
-	searchURL := "https://api.perplexity.ai/chat/completions"
+// SearXNGSearchProvider queries SearXNG instances over their JSON API.
+// If a custom baseURL is provided, it uses only that.
+// Otherwise, it automatically rotates through a list of public instances.
+type SearXNGSearchProvider struct {
+	baseURLs []string
+}
 
-	payload := map[string]interface{}{
-		"model": "sonar",
-		"messages": []map[string]string{
-			{"role": "system", "content": "You are a search assistant. Provide concise search results with titles, URLs, and brief descriptions in the following format:\n1. Title\n   URL\n   Description\n\nDo not add extra commentary."},
-			{"role": "user", "content": fmt.Sprintf("Search for: %s. Provide up to %d relevant results.", query, count)},
-		},
-		"max_tokens": 1000,
+func (p *SearXNGSearchProvider) Search(ctx context.Context, query string, count int) (string, error) {
+	var lastErr error
+
+	for _, baseURL := range p.baseURLs {
+		searchURL := fmt.Sprintf("%s/search?q=%s&format=json&engines=google,bing,duckduckgo,wikipedia",
+			strings.TrimRight(baseURL, "/"), url.QueryEscape(query))
+
+		req, err := http.NewRequestWithContext(ctx, "GET", searchURL, nil)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to create request: %w", err)
+			continue
+		}
+		req.Header.Set("User-Agent", userAgent)
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("request to %s failed: %w", baseURL, err)
+			continue
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read response from %s: %w", baseURL, err)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("SearXNG instance %s returned status %d", baseURL, resp.StatusCode)
+			continue
+		}
+
+		var searchResp struct {
+			Results []struct {
+				Title   string  `json:"title"`
+				URL     string  `json:"url"`
+				Content string  `json:"content"`
+				Score   float64 `json:"score"`
+				Engine  string  `json:"engine"`
+			} `json:"results"`
+		}
+
+		if err := json.Unmarshal(body, &searchResp); err != nil {
+			lastErr = fmt.Errorf("failed to parse SearXNG response from %s: %w", baseURL, err)
+			continue
+		}
+
+		results := searchResp.Results
+		if len(results) == 0 {
+			return fmt.Sprintf("No results for: %s", query), nil
+		}
+
+		var lines []string
+		lines = append(lines, fmt.Sprintf("Results for: %s (via SearXNG %s — multi-engine)", query, baseURL))
+		maxItems := count
+		if maxItems > len(results) {
+			maxItems = len(results)
+		}
+		for i := 0; i < maxItems; i++ {
+			r := results[i]
+			lines = append(lines, fmt.Sprintf("%d. %s\n   %s", i+1, r.Title, r.URL))
+			if r.Content != "" {
+				lines = append(lines, fmt.Sprintf("   %s", r.Content))
+			}
+		}
+		return strings.Join(lines, "\n"), nil
 	}
 
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", searchURL, strings.NewReader(string(payloadBytes)))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	req.Header.Set("User-Agent", userAgent)
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("failed to read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("Perplexity API error: %s", string(body))
-	}
-
-	var searchResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-
-	if err := json.Unmarshal(body, &searchResp); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	if len(searchResp.Choices) == 0 {
-		return fmt.Sprintf("No results for: %s", query), nil
-	}
-
-	return fmt.Sprintf("Results for: %s (via Perplexity)\n%s", query, searchResp.Choices[0].Message.Content), nil
+	return "", fmt.Errorf("all SearXNG instances failed. Last error: %w", lastErr)
 }
 
 type WebSearchTool struct {
@@ -247,30 +267,27 @@ type WebSearchTool struct {
 }
 
 type WebSearchToolOptions struct {
-	BraveAPIKey          string
-	BraveMaxResults      int
-	BraveEnabled         bool
 	DuckDuckGoMaxResults int
 	DuckDuckGoEnabled    bool
-	PerplexityAPIKey     string
-	PerplexityMaxResults int
-	PerplexityEnabled    bool
+	// SearXNG — self-hosted meta-search engine (docker run -p 8080:8080 searxng/searxng)
+	SearXNGURL        string
+	SearXNGMaxResults int
+	SearXNGEnabled    bool
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) *WebSearchTool {
 	var provider SearchProvider
 	maxResults := 5
 
-	// Priority: Perplexity > Brave > DuckDuckGo
-	if opts.PerplexityEnabled && opts.PerplexityAPIKey != "" {
-		provider = &PerplexitySearchProvider{apiKey: opts.PerplexityAPIKey}
-		if opts.PerplexityMaxResults > 0 {
-			maxResults = opts.PerplexityMaxResults
+	// Priority: SearXNG > DuckDuckGo
+	if opts.SearXNGEnabled {
+		urls := defaultSearXNGInstances
+		if opts.SearXNGURL != "" {
+			urls = []string{opts.SearXNGURL}
 		}
-	} else if opts.BraveEnabled && opts.BraveAPIKey != "" {
-		provider = &BraveSearchProvider{apiKey: opts.BraveAPIKey}
-		if opts.BraveMaxResults > 0 {
-			maxResults = opts.BraveMaxResults
+		provider = &SearXNGSearchProvider{baseURLs: urls}
+		if opts.SearXNGMaxResults > 0 {
+			maxResults = opts.SearXNGMaxResults
 		}
 	} else if opts.DuckDuckGoEnabled {
 		provider = &DuckDuckGoSearchProvider{}
@@ -339,7 +356,8 @@ func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}
 }
 
 type WebFetchTool struct {
-	maxChars int
+	maxChars          int
+	jinaReaderEnabled bool
 }
 
 func NewWebFetchTool(maxChars int) *WebFetchTool {
@@ -347,8 +365,14 @@ func NewWebFetchTool(maxChars int) *WebFetchTool {
 		maxChars = 50000
 	}
 	return &WebFetchTool{
-		maxChars: maxChars,
+		maxChars:          maxChars,
+		jinaReaderEnabled: true, // enabled by default — no API key needed
 	}
+}
+
+// SetJinaReaderEnabled enables or disables the Jina AI Reader extraction mode.
+func (t *WebFetchTool) SetJinaReaderEnabled(v bool) {
+	t.jinaReaderEnabled = v
 }
 
 func (t *WebFetchTool) Name() string {
@@ -356,7 +380,7 @@ func (t *WebFetchTool) Name() string {
 }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetch a URL and extract readable content (HTML to text). Use this to get weather info, news, articles, or any web content."
+	return "Fetch a URL and extract readable content as clean markdown text. Use this for documentation, news articles, blog posts, or any web content. Results are cached within a session to avoid redundant requests."
 }
 
 func (t *WebFetchTool) Parameters() map[string]interface{} {
@@ -403,13 +427,47 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create request: %v", err))
+	// ── LRU cache check ──────────────────────────────────────────────────────
+	cacheKey := fmt.Sprintf("%s|%d", urlStr, maxChars)
+	if cached, hit := globalFetchCache.get(cacheKey); hit {
+		return &ToolResult{
+			ForLLM:  fmt.Sprintf("[cache hit] %s\n\n%s", urlStr, cached),
+			ForUser: fmt.Sprintf("[cache hit] %s", urlStr),
+		}
 	}
 
-	req.Header.Set("User-Agent", userAgent)
+	// ── Strategy 1: Jina AI Reader (clean markdown, no API key) ──────────────
+	// Jina Reader converts any URL to clean markdown using readability algorithms.
+	// It handles JS-rendered content, removes nav/ads, and formats code blocks.
+	if t.jinaReaderEnabled {
+		jinaURL := "https://r.jina.ai/" + urlStr
+		jinaReq, err := http.NewRequestWithContext(ctx, "GET", jinaURL, nil)
+		if err == nil {
+			jinaReq.Header.Set("User-Agent", userAgent)
+			jinaReq.Header.Set("Accept", "text/markdown, text/plain")
+			jinaClient := &http.Client{Timeout: 20 * time.Second}
+			jinaResp, jinaErr := jinaClient.Do(jinaReq)
+			if jinaErr == nil {
+				defer jinaResp.Body.Close()
+				jinaBody, readErr := io.ReadAll(jinaResp.Body)
+				if readErr == nil && jinaResp.StatusCode == http.StatusOK && len(jinaBody) > 200 {
+					text := string(jinaBody)
+					truncated := len(text) > maxChars
+					if truncated {
+						text = text[:maxChars]
+					}
+					globalFetchCache.set(cacheKey, text)
+					return &ToolResult{
+						ForLLM:  fmt.Sprintf("Fetched %s (extractor: jina-reader, truncated: %v)\n\nContent:\n%s", urlStr, truncated, text),
+						ForUser: fmt.Sprintf("Fetched %s via Jina Reader (%d chars)", urlStr, len(text)),
+					}
+				}
+			}
+		}
+		// Jina failed or returned thin content — fall through to direct fetch
+	}
 
+	// ── Strategy 2: Direct HTTP fetch with content-type aware extraction ──────
 	client := &http.Client{
 		Timeout: 60 * time.Second,
 		Transport: &http.Transport{
@@ -426,6 +484,12 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		},
 	}
 
+	req, err := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create request: %v", err))
+	}
+	req.Header.Set("User-Agent", userAgent)
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("request failed: %v", err))
@@ -441,21 +505,21 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 
 	var text, extractor string
 
-	if strings.Contains(contentType, "application/json") {
+	switch {
+	case strings.Contains(contentType, "application/json"):
 		var jsonData interface{}
 		if err := json.Unmarshal(body, &jsonData); err == nil {
 			formatted, _ := json.MarshalIndent(jsonData, "", "  ")
 			text = string(formatted)
-			extractor = "json"
 		} else {
 			text = string(body)
-			extractor = "raw"
 		}
-	} else if strings.Contains(contentType, "text/html") || len(body) > 0 &&
-		(strings.HasPrefix(string(body), "<!DOCTYPE") || strings.HasPrefix(strings.ToLower(string(body)), "<html")) {
+		extractor = "json"
+	case strings.Contains(contentType, "text/html"),
+		len(body) > 0 && (strings.HasPrefix(string(body), "<!DOCTYPE") || strings.HasPrefix(strings.ToLower(string(body)), "<html")):
 		text = t.extractText(string(body))
-		extractor = "text"
-	} else {
+		extractor = "html-regex"
+	default:
 		text = string(body)
 		extractor = "raw"
 	}
@@ -465,20 +529,11 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{})
 		text = text[:maxChars]
 	}
 
-	result := map[string]interface{}{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
-	}
-
-	resultJSON, _ := json.MarshalIndent(result, "", "  ")
+	globalFetchCache.set(cacheKey, text)
 
 	return &ToolResult{
 		ForLLM:  fmt.Sprintf("Fetched %d bytes from %s (extractor: %s, truncated: %v)\n\nContent:\n%s", len(text), urlStr, extractor, truncated, text),
-		ForUser: string(resultJSON),
+		ForUser: fmt.Sprintf("Fetched %s (%s, %d chars)", urlStr, extractor, len(text)),
 	}
 }
 

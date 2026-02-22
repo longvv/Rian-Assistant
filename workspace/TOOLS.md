@@ -39,13 +39,24 @@
 
 - Engage search functions when dealing with unfamiliar API changes, standard library edge cases, or external dependencies where knowledge might be outdated.
 - Always cross-reference multiple results when making critical architectural decisions based on search.
+- **SearXNG priority**: If `tools.web.searxng.enabled=true` in config, web_search uses SearXNG (multi-engine: Google + Bing + DuckDuckGo + Wikipedia) — no API key needed. Automatically uses a curated list of reliable public instances if no self-hosted URL is provided. Highest quality free search.
 
 ### 4. Web Fetch (`web_fetch`) — Discipline Rules
 
+- **Jina AI Reader (default ON)**: `web_fetch` first tries `https://r.jina.ai/{url}` which returns clean markdown from any URL using Mozilla Readability. This is the preferred extractor — no JS-rendered content issues.
 - **Avoid JS-rendered sites for data.** Sites like `kitco.com`, `investing.com`, `tradingeconomics.com`, `coinmarketcap.com`, and similar financial dashboards render their data client-side via JavaScript. A plain HTTP fetch will return a skeleton HTML shell with no useful numeric data. Do NOT repeatedly fetch the same JS-rendered domain hoping for different results.
 - **Only fetch JSON/API endpoints.** Use `web_fetch` on URLs that look like REST/JSON endpoints: they contain `/api/`, `.json`, `/v1/`, `/v2/`, `/spot`, `/ticker`, or similar patterns. If unsure, use `web_search` instead.
 - **Bail after 2 failed domain attempts.** If `web_fetch` on a domain returns a result that is either very short (< 300 chars) or contains no numeric data relevant to the query, do NOT try other paths on that same domain. Mark that domain as "unhelpful" and move on.
+- **Results are cached** (10 min TTL): re-fetching the same URL within a session returns instantly from cache. No need to call `web_fetch` twice for the same URL.
+- **Check SOURCES.md first** for known-good free JSON APIs before trying to scrape any website.
 - **Financial/live data strategy:**
-  1. Use `web_search` first — it returns summarised text including prices.
-  2. If a live number is needed, try a known-good JSON API (e.g. `https://open.er-api.com`, `https://api.coinbase.com/v2/prices/BTC-USD/spot`).
-  3. If no JSON API returns clean data within 2 attempts, present the `web_search` summary with a note that values may be slightly delayed. Do **not** exceed these limits chasing a perfect source.
+  1. Check `workspace/SOURCES.md` for a known-good API endpoint.
+  2. Use `web_search` first — it returns summarised text including prices.
+  3. If a live number is needed, try a known-good JSON API (e.g. `https://open.er-api.com`, `https://api.coinbase.com/v2/prices/BTC-USD/spot`).
+  4. If no JSON API returns clean data within 2 attempts, present the `web_search` summary with a note that values may be slightly delayed. Do **not** exceed these limits chasing a perfect source.
+
+### 5. Calculator (`calculator`) — Use for All Math
+
+- **Always use `calculator` for arithmetic** rather than mental math or shell commands. Available: `+`, `-`, `*`, `/`, `%`, `^`, `()`, `sqrt`, `abs`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `exp`, `floor`, `ceil`, `round`, `pi`, `e`, `phi`.
+- Examples: `calculator("sqrt(144) + pi")`, `calculator("(1234 - 987) / 987 * 100")`
+- Zero overhead — no shell required, no side effects.

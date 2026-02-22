@@ -387,27 +387,25 @@ type GatewayConfig struct {
 	Port int    `json:"port" env:"PICOCLAW_GATEWAY_PORT"`
 }
 
-type BraveConfig struct {
-	Enabled    bool   `json:"enabled" env:"PICOCLAW_TOOLS_WEB_BRAVE_ENABLED"`
-	APIKey     string `json:"api_key" env:"PICOCLAW_TOOLS_WEB_BRAVE_API_KEY"`
-	MaxResults int    `json:"max_results" env:"PICOCLAW_TOOLS_WEB_BRAVE_MAX_RESULTS"`
-}
-
 type DuckDuckGoConfig struct {
 	Enabled    bool `json:"enabled" env:"PICOCLAW_TOOLS_WEB_DUCKDUCKGO_ENABLED"`
 	MaxResults int  `json:"max_results" env:"PICOCLAW_TOOLS_WEB_DUCKDUCKGO_MAX_RESULTS"`
 }
 
-type PerplexityConfig struct {
-	Enabled    bool   `json:"enabled" env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_ENABLED"`
-	APIKey     string `json:"api_key" env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_API_KEY"`
-	MaxResults int    `json:"max_results" env:"PICOCLAW_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
+// SearXNGConfig configures a self-hosted SearXNG meta-search instance.
+// Run with: docker run -p 8080:8080 searxng/searxng
+type SearXNGConfig struct {
+	Enabled    bool   `json:"enabled" env:"PICOCLAW_TOOLS_WEB_SEARXNG_ENABLED"`
+	URL        string `json:"url" env:"PICOCLAW_TOOLS_WEB_SEARXNG_URL"` // e.g. http://localhost:8080
+	MaxResults int    `json:"max_results" env:"PICOCLAW_TOOLS_WEB_SEARXNG_MAX_RESULTS"`
 }
 
 type WebToolsConfig struct {
-	Brave      BraveConfig      `json:"brave"`
 	DuckDuckGo DuckDuckGoConfig `json:"duckduckgo"`
-	Perplexity PerplexityConfig `json:"perplexity"`
+	SearXNG    SearXNGConfig    `json:"searxng"`
+	// JinaReader: when true, web_fetch uses https://r.jina.ai/{url} for clean markdown extraction.
+	// No API key required for basic usage.
+	JinaReaderEnabled bool `json:"jina_reader_enabled" env:"PICOCLAW_TOOLS_WEB_JINA_READER_ENABLED"`
 }
 
 type CronToolsConfig struct {

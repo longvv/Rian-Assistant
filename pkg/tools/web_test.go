@@ -31,14 +31,15 @@ func TestWebTool_WebFetch_Success(t *testing.T) {
 		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
 	}
 
-	// ForUser should contain the fetched content
-	if !strings.Contains(result.ForUser, "Test Page") {
-		t.Errorf("Expected ForUser to contain 'Test Page', got: %s", result.ForUser)
+	// ForUser is now a concise summary string like "Fetched http://... (html-regex, N chars)"
+	// Actual content is in ForLLM — check that instead
+	if !strings.Contains(result.ForLLM, "Test Page") {
+		t.Errorf("Expected ForLLM to contain 'Test Page', got: %s", result.ForLLM)
 	}
 
-	// ForLLM should contain summary
-	if !strings.Contains(result.ForLLM, "bytes") && !strings.Contains(result.ForLLM, "extractor") {
-		t.Errorf("Expected ForLLM to contain summary, got: %s", result.ForLLM)
+	// ForUser should at least mention the URL
+	if !strings.Contains(result.ForUser, server.URL) && !strings.Contains(result.ForUser, "Fetched") {
+		t.Errorf("Expected ForUser to mention the URL, got: %s", result.ForUser)
 	}
 }
 
@@ -67,9 +68,9 @@ func TestWebTool_WebFetch_JSON(t *testing.T) {
 		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
 	}
 
-	// ForUser should contain formatted JSON
-	if !strings.Contains(result.ForUser, "key") && !strings.Contains(result.ForUser, "value") {
-		t.Errorf("Expected ForUser to contain JSON data, got: %s", result.ForUser)
+	// ForUser is now a concise summary string — content is in ForLLM
+	if !strings.Contains(result.ForLLM, "key") || !strings.Contains(result.ForLLM, "value") {
+		t.Errorf("Expected ForLLM to contain JSON data, got: %s", result.ForLLM)
 	}
 }
 
@@ -158,26 +159,20 @@ func TestWebTool_WebFetch_Truncation(t *testing.T) {
 		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
 	}
 
-	// ForUser should contain truncated content (not the full 20000 chars)
-	resultMap := make(map[string]interface{})
-	json.Unmarshal([]byte(result.ForUser), &resultMap)
-	if text, ok := resultMap["text"].(string); ok {
-		if len(text) > 1100 { // Allow some margin
-			t.Errorf("Expected content to be truncated to ~1000 chars, got: %d", len(text))
-		}
-	}
-
-	// Should be marked as truncated
-	if truncated, ok := resultMap["truncated"].(bool); !ok || !truncated {
-		t.Errorf("Expected 'truncated' to be true in result")
+	// ForUser is now a concise summary string; check ForLLM for truncation indicator.
+	// ForLLM contains the actual text. When Jina is tried on localhost it will fail (not reachable),
+	// so the direct fetch path runs and the text is truncated.
+	if !strings.Contains(result.ForLLM, "truncated: true") {
+		t.Errorf("Expected ForLLM to mention truncation, got: %s", result.ForLLM)
 	}
 }
 
-// TestWebTool_WebSearch_NoApiKey verifies that no tool is created when API key is missing
-func TestWebTool_WebSearch_NoApiKey(t *testing.T) {
-	tool := NewWebSearchTool(WebSearchToolOptions{BraveEnabled: true, BraveAPIKey: ""})
+// TestWebTool_WebSearch_Disabled verifies that no tool is created when providers are disabled
+func TestWebTool_WebSearch_Disabled(t *testing.T) {
+	// disabled via options
+	tool := NewWebSearchTool(WebSearchToolOptions{DuckDuckGoEnabled: false, SearXNGEnabled: false})
 	if tool != nil {
-		t.Errorf("Expected nil tool when Brave API key is empty")
+		t.Errorf("Expected nil tool when no provider is enabled")
 	}
 
 	// Also nil when nothing is enabled
@@ -189,7 +184,7 @@ func TestWebTool_WebSearch_NoApiKey(t *testing.T) {
 
 // TestWebTool_WebSearch_MissingQuery verifies error handling for missing query
 func TestWebTool_WebSearch_MissingQuery(t *testing.T) {
-	tool := NewWebSearchTool(WebSearchToolOptions{BraveEnabled: true, BraveAPIKey: "test-key", BraveMaxResults: 5})
+	tool := NewWebSearchTool(WebSearchToolOptions{DuckDuckGoEnabled: true, DuckDuckGoMaxResults: 5})
 	ctx := context.Background()
 	args := map[string]interface{}{}
 
@@ -223,14 +218,14 @@ func TestWebTool_WebFetch_HTMLExtraction(t *testing.T) {
 		t.Errorf("Expected success, got IsError=true: %s", result.ForLLM)
 	}
 
-	// ForUser should contain extracted text (without script/style tags)
-	if !strings.Contains(result.ForUser, "Title") && !strings.Contains(result.ForUser, "Content") {
-		t.Errorf("Expected ForUser to contain extracted text, got: %s", result.ForUser)
+	// Content is in ForLLM, ForUser is a concise summary
+	if !strings.Contains(result.ForLLM, "Title") && !strings.Contains(result.ForLLM, "Content") {
+		t.Errorf("Expected ForLLM to contain extracted text, got: %s", result.ForLLM)
 	}
 
-	// Should NOT contain script or style tags
-	if strings.Contains(result.ForUser, "<script>") || strings.Contains(result.ForUser, "<style>") {
-		t.Errorf("Expected script/style tags to be removed, got: %s", result.ForUser)
+	// Should NOT contain script or style tags in ForLLM
+	if strings.Contains(result.ForLLM, "<script>") || strings.Contains(result.ForLLM, "<style>") {
+		t.Errorf("Expected script/style tags to be removed, got: %s", result.ForLLM)
 	}
 }
 
@@ -326,5 +321,43 @@ func TestWebTool_WebFetch_MissingDomain(t *testing.T) {
 	// Should mention missing domain
 	if !strings.Contains(result.ForLLM, "domain") && !strings.Contains(result.ForUser, "domain") {
 		t.Errorf("Expected domain error message, got ForLLM: %s", result.ForLLM)
+	}
+}
+
+// TestSearXNGSearchProvider_Fallback verifies that it falls back to the next URL on failure
+func TestSearXNGSearchProvider_Fallback(t *testing.T) {
+	// Create a failing server (502 Gateway Timeout)
+	failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer failServer.Close()
+
+	// Create a succeeding server
+	successData := `{"results": [{"title": "Test Title", "url": "http://test.com", "content": "Test content", "score": 1.0, "engine": "google"}]}`
+	successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(successData))
+	}))
+	defer successServer.Close()
+
+	// Provide the failing server first, then the succeeding server
+	provider := &SearXNGSearchProvider{
+		baseURLs: []string{failServer.URL, successServer.URL},
+	}
+
+	result, err := provider.Search(context.Background(), "test query", 5)
+
+	if err != nil {
+		t.Fatalf("Expected success after fallback, got error: %v", err)
+	}
+
+	if !strings.Contains(result, "Test Title") {
+		t.Errorf("Expected result to contain 'Test Title', got: %s", result)
+	}
+
+	// Double check that the successful server's URL is listed in the output header
+	if !strings.Contains(result, successServer.URL) {
+		t.Errorf("Expected result to mention successful server %s, got: %s", successServer.URL, result)
 	}
 }

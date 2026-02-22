@@ -39,6 +39,34 @@
       "api_key": "sk-your-deepseek-key"
     },
     {
+      "_comment": "Free tier: Groq — ultra-fast, 14400 req/day, 128k context. Get key at console.groq.com",
+      "model_name": "groq-llama",
+      "model": "openai/llama-3.3-70b-versatile",
+      "api_key": "gsk_your-groq-key",
+      "api_base": "https://api.groq.com/openai/v1"
+    },
+    {
+      "_comment": "Free tier: Cerebras — blazing fast inference, 128k context. Get key at cloud.cerebras.ai",
+      "model_name": "cerebras-llama",
+      "model": "openai/llama-3.3-70b",
+      "api_key": "csk_your-cerebras-key",
+      "api_base": "https://api.cerebras.ai/v1"
+    },
+    {
+      "_comment": "Free forever: Together AI free models. Get key at api.together.ai",
+      "model_name": "together-llama",
+      "model": "openai/meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+      "api_key": "your-together-key",
+      "api_base": "https://api.together.xyz/v1"
+    },
+    {
+      "_comment": "Free local: Ollama — run any open model offline. No API key needed.",
+      "model_name": "ollama-local",
+      "model": "openai/qwen2.5-coder:7b",
+      "api_key": "ollama",
+      "api_base": "http://localhost:11434/v1"
+    },
+    {
       "model_name": "loadbalanced-gpt4",
       "model": "openai/gpt-5.2",
       "api_key": "sk-key1",
@@ -179,20 +207,17 @@
   },
   "tools": {
     "web": {
-      "brave": {
-        "enabled": false,
-        "api_key": "YOUR_BRAVE_API_KEY",
-        "max_results": 5
-      },
       "duckduckgo": {
         "enabled": true,
         "max_results": 5
       },
-      "perplexity": {
+      "searxng": {
+        "_comment": "Can use a custom self-hosted URL. Keep empty \"\" to use public instances fallback (e.g. searx.be)",
         "enabled": false,
-        "api_key": "pplx-xxx",
-        "max_results": 5
-      }
+        "url": "",
+        "max_results": 8
+      },
+      "jina_reader_enabled": true
     },
     "cron": {
       "exec_timeout_minutes": 5
