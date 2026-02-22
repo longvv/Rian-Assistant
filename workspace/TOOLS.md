@@ -14,6 +14,21 @@
 - For long-running process, use async tool calls or send them to the background if supported.
 - Never blindly run potentially destructive commands (`rm -rf`, `docker system prune`, etc.) without rigorous checks and explicit user confirmation if deemed high-risk.
 
+### 1a. Shell Script Discipline (CRITICAL)
+
+> **The runtime environment only has `sh` (busybox/Alpine). `bash` is NOT installed.**
+
+- **Always use `#!/bin/sh`** as the shebang. Never `#!/bin/bash`.
+- **Never use bash-specific syntax** — forbidden constructs include:
+  - Here-strings: `cmd <<< "$var"` → use `echo "$var" | cmd` instead
+  - Arrays: `arr=(a b c)` → use positional params or a newline-delimited string
+  - `[[ ... ]]` conditions → use `[ ... ]` (POSIX test)
+  - Process substitution: `<(cmd)` → use a temp file or pipe
+- **Validate before running**: always run `sh -n <script>` after writing and confirm exit code is 0. If it fails, read the file back and fix the syntax.
+- **Verify writes**: after every `write_file`, immediately call `read_file` on the same path to confirm the file content is correct and complete before attempting to execute it.
+- **Don't loop on edit_file failures**: if `edit_file` fails with "old_text not found" twice, use `write_file` to rewrite the entire file instead of retrying the same edit.
+- **RSS/XML feeds**: use `grep -o '<title>[^<]*</title>' | sed ...` to extract titles. Do NOT use JSON-style grep (`"title":"..."`) on XML feeds — they produce no output.
+
 ### 2. Code Modification
 
 - Provide precise diffs.
