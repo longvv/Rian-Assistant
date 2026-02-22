@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Define paths
 WORKSPACE="${WORKSPACE:-/home/picoclaw/.picoclaw/workspace/news}"
