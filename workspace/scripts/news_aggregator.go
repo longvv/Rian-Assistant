@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+// Global pre-compiled regex to save massive CPU cycles per record
+var (
+	reHTML = regexp.MustCompile(`(?i)<[^>]*>`)
+	reEnt  = regexp.MustCompile(`(?i)&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});`)
+	reWS   = regexp.MustCompile(`\s+`)
+	reLink = regexp.MustCompile(`\]\((https?://[^\)]+)\)`)
 )
 
 type OpenRouterRequest struct {
@@ -99,7 +108,6 @@ func generateSummary(apiKey string, itemsBySource map[string][]NewsItem) string 
 
 	var orResp OpenRouterResponse
 	if err := json.Unmarshal(bodyText, &orResp); err != nil {
-		fmt.Printf("⚠️ Lỗi parse JSON trả về từ AI: %v\n", err)
 		return ""
 	}
 
@@ -150,13 +158,8 @@ func cleanHTML(s string) string {
 	s = strings.ReplaceAll(s, "<![CDATA[", "")
 	s = strings.ReplaceAll(s, "]]>", "")
 
-	reHTML := regexp.MustCompile(`(?i)<[^>]*>`)
 	s = reHTML.ReplaceAllString(s, "")
-
-	reEnt := regexp.MustCompile(`(?i)&([a-z0-9]+|#[0-9]{1,6}|#x[0-9a-f]{1,6});`)
 	s = reEnt.ReplaceAllString(s, "")
-
-	reWS := regexp.MustCompile(`\s+`)
 	s = reWS.ReplaceAllString(s, " ")
 
 	return strings.TrimSpace(s)
@@ -199,14 +202,15 @@ func fetchFeed(f FeedSource, client *http.Client, history, newLinks map[string]b
 	}
 	defer resp.Body.Close()
 
+	var rssFeed RssFeed
+	var atomFeed AtomFeed
+	var localItems []NewsItem
+
+	// Read body bytes for Unmarshaling
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return
 	}
-
-	var rssFeed RssFeed
-	var atomFeed AtomFeed
-	var localItems []NewsItem
 
 	isAtom := false
 	if err := xml.Unmarshal(body, &rssFeed); err != nil || len(rssFeed.Channel.Items) == 0 {
@@ -271,13 +275,24 @@ func fetchFeed(f FeedSource, client *http.Client, history, newLinks map[string]b
 }
 
 func main() {
-	// Setup HTTP client allowing insecure certs
+	// Extreme Performance HTTP Transport Configuration
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second, // Max TCP connection wait time
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100, // Reuse connections widely globally
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 	}
+
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   15 * time.Second,
+		Timeout:   15 * time.Second, // Hard exit if response hangs infinitely
 	}
 
 	// Calculate workspace dir
@@ -298,8 +313,7 @@ func main() {
 	// Read history
 	history := make(map[string]bool)
 	if content, err := os.ReadFile(historyFile); err == nil {
-		re := regexp.MustCompile(`\]\((https?://[^\)]+)\)`)
-		matches := re.FindAllStringSubmatch(string(content), -1)
+		matches := reLink.FindAllStringSubmatch(string(content), -1)
 		for _, match := range matches {
 			if len(match) > 1 {
 				history[match[1]] = true
