@@ -195,10 +195,16 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 			workspaceDir = "workspace"
 		}
 
-		scriptPath := "workspace/scripts/news_aggregator.go"
+		var cmd *exec.Cmd
+		binaryPath := "/usr/local/bin/news_aggregator"
+		if _, err := os.Stat(binaryPath); err == nil {
+			cmd = exec.Command(binaryPath)
+		} else {
+			scriptPath := "workspace/scripts/news_aggregator.go"
+			goExe := findGoExecutable()
+			cmd = exec.Command(goExe, "run", scriptPath)
+		}
 
-		goExe := findGoExecutable()
-		cmd := exec.Command(goExe, "run", scriptPath)
 		cmd.Env = append(os.Environ(), "WORKSPACE="+workspaceDir)
 
 		output, err := cmd.CombinedOutput()

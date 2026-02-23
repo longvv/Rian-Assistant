@@ -14,6 +14,7 @@ RUN go mod download
 # Copy source and build
 COPY . .
 RUN make build
+RUN go build -o /src/build/news_aggregator workspace/scripts/news_aggregator.go
 
 # ============================================================
 # Stage 2: Minimal runtime image
@@ -28,6 +29,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 
 # Copy binary
 COPY --from=builder /src/build/picoclaw /usr/local/bin/picoclaw
+COPY --from=builder /src/build/news_aggregator /usr/local/bin/news_aggregator
 
 # Create non-root user and group
 RUN addgroup -g 1000 picoclaw && \
