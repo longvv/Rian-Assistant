@@ -306,9 +306,18 @@ func main() {
 		workspace = fallbackWorkspace
 	}
 
+	workspace, err = filepath.Abs(workspace)
+	if err != nil {
+		fmt.Printf("❌ Failed to resolve absolute path for workspace: %v\n", err)
+		return
+	}
+
 	historyFile := filepath.Join(workspace, "reported.md")
 	reportsDir := filepath.Join(workspace, "reports")
-	os.MkdirAll(reportsDir, 0755)
+	if err := os.MkdirAll(reportsDir, 0755); err != nil {
+		fmt.Printf("❌ Failed to create reports directory %s: %v\n", reportsDir, err)
+		return
+	}
 
 	// Read history
 	history := make(map[string]bool)

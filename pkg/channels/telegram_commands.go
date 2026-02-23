@@ -192,7 +192,13 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 	go func() {
 		workspaceDir := os.Getenv("WORKSPACE")
 		if workspaceDir == "" {
-			workspaceDir = "workspace"
+			if cwd, err := os.Getwd(); err == nil && cwd != "/" {
+				workspaceDir = fmt.Sprintf("%s/workspace", cwd)
+			} else if home, err := os.UserHomeDir(); err == nil {
+				workspaceDir = fmt.Sprintf("%s/workspace", home)
+			} else {
+				workspaceDir = "workspace"
+			}
 		}
 
 		var cmd *exec.Cmd
