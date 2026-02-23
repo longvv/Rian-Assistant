@@ -66,7 +66,7 @@ func generateSummary(apiKey string, itemsBySource map[string][]NewsItem) string 
 	}
 
 	reqBody := OpenRouterRequest{
-		Model: "openrouter/nvidia/nemotron-3-nano-30b-a3b:free",
+		Model: "arcee-ai/trinity-large-preview:free",
 		Messages: []Message{
 			{Role: "user", Content: promptBuilder.String()},
 		},

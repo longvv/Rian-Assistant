@@ -3,9 +3,12 @@ package channels
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 	"github.com/sipeed/picoclaw/pkg/config"
 )
 
@@ -14,6 +17,7 @@ type TelegramCommander interface {
 	Start(ctx context.Context, message telego.Message) error
 	Show(ctx context.Context, message telego.Message) error
 	List(ctx context.Context, message telego.Message) error
+	News(ctx context.Context, message telego.Message) error
 }
 
 type cmd struct {
@@ -150,4 +154,72 @@ func (c *cmd) List(ctx context.Context, message telego.Message) error {
 		},
 	})
 	return err
+}
+
+func (c *cmd) News(ctx context.Context, message telego.Message) error {
+	pMsg, err := c.bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: message.Chat.ID},
+		Text:   "Đang tổng hợp tin tức... 🗞️",
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: message.MessageID,
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		workspaceDir := os.Getenv("WORKSPACE")
+		if workspaceDir == "" {
+			workspaceDir = "workspace"
+		}
+
+		scriptPath := "workspace/scripts/news_aggregator.go"
+
+		cmd := exec.Command("go", "run", scriptPath)
+		cmd.Env = append(os.Environ(), "WORKSPACE="+workspaceDir)
+
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			msg := fmt.Sprintf("❌ Lỗi khi tải tin tức: %v\n\n%s", err, string(output))
+			_, _ = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+				ChatID:    telego.ChatID{ID: message.Chat.ID},
+				MessageID: pMsg.MessageID,
+				Text:      msg,
+			})
+			return
+		}
+
+		htmlContent := markdownToTelegramHTML(string(output))
+
+		if len(htmlContent) <= telegramHTMLLimit {
+			_, _ = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+				ChatID:    telego.ChatID{ID: message.Chat.ID},
+				MessageID: pMsg.MessageID,
+				Text:      htmlContent,
+				ParseMode: telego.ModeHTML,
+			})
+		} else {
+			// Delete placeholder and send document
+			_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+				ChatID:    telego.ChatID{ID: message.Chat.ID},
+				MessageID: pMsg.MessageID,
+			})
+
+			caption := buildCaption(string(output), telegramCaptionLimit)
+			htmlCaption := markdownToTelegramHTML(caption)
+
+			docParams := tu.Document(tu.ID(message.Chat.ID), tu.FileFromBytes(output, "news_report.md"))
+			docParams.Caption = htmlCaption
+			docParams.ParseMode = telego.ModeHTML
+
+			if _, err := c.bot.SendDocument(ctx, docParams); err != nil {
+				docParams.Caption = caption
+				docParams.ParseMode = ""
+				_, _ = c.bot.SendDocument(ctx, docParams)
+			}
+		}
+	}()
+
+	return nil
 }

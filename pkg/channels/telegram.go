@@ -115,6 +115,10 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	}, th.CommandEqual("start"))
 
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		return c.commands.News(ctx, message)
+	}, th.CommandEqual("news"))
+
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.commands.Show(ctx, message)
 	}, th.CommandEqual("show"))
 
