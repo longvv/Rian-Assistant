@@ -18,6 +18,7 @@ type TelegramCommander interface {
 	Show(ctx context.Context, message telego.Message) error
 	List(ctx context.Context, message telego.Message) error
 	News(ctx context.Context, message telego.Message) error
+	Status(ctx context.Context, message telego.Message) error
 }
 
 type cmd struct {
@@ -44,6 +45,8 @@ func (c *cmd) Help(ctx context.Context, message telego.Message) error {
 /help - Show this help message
 /show [model|channel] - Show current configuration
 /list [models|channels] - List available options
+/news - Fetch latest news
+/status - Show current bot status
 	`
 	_, err := c.bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: message.Chat.ID},
@@ -182,7 +185,7 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			msg := fmt.Sprintf("❌ Lỗi khi tải tin tức: %v\n\n%s", err, string(output))
-			_, _ = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			_, _ = c.bot.EditMessageText(context.Background(), &telego.EditMessageTextParams{
 				ChatID:    telego.ChatID{ID: message.Chat.ID},
 				MessageID: pMsg.MessageID,
 				Text:      msg,
@@ -193,7 +196,7 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 		htmlContent := markdownToTelegramHTML(string(output))
 
 		if len(htmlContent) <= telegramHTMLLimit {
-			_, _ = c.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			_, _ = c.bot.EditMessageText(context.Background(), &telego.EditMessageTextParams{
 				ChatID:    telego.ChatID{ID: message.Chat.ID},
 				MessageID: pMsg.MessageID,
 				Text:      htmlContent,
@@ -201,7 +204,7 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 			})
 		} else {
 			// Delete placeholder and send document
-			_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+			_ = c.bot.DeleteMessage(context.Background(), &telego.DeleteMessageParams{
 				ChatID:    telego.ChatID{ID: message.Chat.ID},
 				MessageID: pMsg.MessageID,
 			})
@@ -213,13 +216,74 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 			docParams.Caption = htmlCaption
 			docParams.ParseMode = telego.ModeHTML
 
-			if _, err := c.bot.SendDocument(ctx, docParams); err != nil {
+			if _, err := c.bot.SendDocument(context.Background(), docParams); err != nil {
 				docParams.Caption = caption
 				docParams.ParseMode = ""
-				_, _ = c.bot.SendDocument(ctx, docParams)
+				_, _ = c.bot.SendDocument(context.Background(), docParams)
 			}
 		}
 	}()
 
 	return nil
+}
+
+func (c *cmd) Status(ctx context.Context, message telego.Message) error {
+	var sb strings.Builder
+
+	sb.WriteString("🤖 *PicoClaw Status*\n\n")
+	sb.WriteString(fmt.Sprintf("• **Model:** `%s`\n", c.config.Agents.Defaults.Model))
+	sb.WriteString(fmt.Sprintf("• **Provider:** `%s`\n\n", c.config.Agents.Defaults.Provider))
+
+	sb.WriteString("📡 *Enabled Channels*\n")
+
+	enabledChannels := []string{}
+	if c.config.Channels.Telegram.Enabled {
+		enabledChannels = append(enabledChannels, "Telegram")
+	}
+	if c.config.Channels.WhatsApp.Enabled {
+		enabledChannels = append(enabledChannels, "WhatsApp")
+	}
+	if c.config.Channels.Feishu.Enabled {
+		enabledChannels = append(enabledChannels, "Feishu")
+	}
+	if c.config.Channels.Discord.Enabled {
+		enabledChannels = append(enabledChannels, "Discord")
+	}
+	if c.config.Channels.Slack.Enabled {
+		enabledChannels = append(enabledChannels, "Slack")
+	}
+	if c.config.Channels.MaixCam.Enabled {
+		enabledChannels = append(enabledChannels, "MaixCam")
+	}
+	if c.config.Channels.QQ.Enabled {
+		enabledChannels = append(enabledChannels, "QQ")
+	}
+	if c.config.Channels.DingTalk.Enabled {
+		enabledChannels = append(enabledChannels, "DingTalk")
+	}
+	if c.config.Channels.LINE.Enabled {
+		enabledChannels = append(enabledChannels, "LINE")
+	}
+	if c.config.Channels.OneBot.Enabled {
+		enabledChannels = append(enabledChannels, "OneBot")
+	}
+
+	if len(enabledChannels) == 0 {
+		sb.WriteString("None")
+	} else {
+		for _, ch := range enabledChannels {
+			sb.WriteString(fmt.Sprintf("• %s\n", ch))
+		}
+	}
+
+	_, err := c.bot.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID:    telego.ChatID{ID: message.Chat.ID},
+		Text:      sb.String(),
+		ParseMode: telego.ModeMarkdown,
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: message.MessageID,
+		},
+	})
+
+	return err
 }
