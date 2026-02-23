@@ -16,6 +16,12 @@
       "api_key": "${OPENROUTER_API_KEY}"
     },
     {
+      "model_name": "llama-3.2-3b-instruct:free",
+      "model": "openrouter/meta-llama/llama-3.2-3b-instruct:free",
+      "api_base": "https://openrouter.ai/api/v1",
+      "api_key": "${OPENROUTER_API_KEY}"
+    },
+    {
       "model_name": "trinity-large-preview:free",
       "model": "openrouter/arcee-ai/trinity-large-preview:free",
       "api_key": "${OPENROUTER_API_KEY}",
