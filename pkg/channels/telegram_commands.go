@@ -40,6 +40,24 @@ func commandArgs(text string) string {
 	}
 	return strings.TrimSpace(parts[1])
 }
+
+func findGoExecutable() string {
+	if path, err := exec.LookPath("go"); err == nil {
+		return path
+	}
+	commonPaths := []string{
+		"/opt/homebrew/bin/go",
+		"/usr/local/go/bin/go",
+		"/usr/local/bin/go",
+		"/usr/bin/go",
+	}
+	for _, p := range commonPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return "go" // fallback
+}
 func (c *cmd) Help(ctx context.Context, message telego.Message) error {
 	msg := `/start - Start the bot
 /help - Show this help message
@@ -179,7 +197,8 @@ func (c *cmd) News(ctx context.Context, message telego.Message) error {
 
 		scriptPath := "workspace/scripts/news_aggregator.go"
 
-		cmd := exec.Command("go", "run", scriptPath)
+		goExe := findGoExecutable()
+		cmd := exec.Command(goExe, "run", scriptPath)
 		cmd.Env = append(os.Environ(), "WORKSPACE="+workspaceDir)
 
 		output, err := cmd.CombinedOutput()
