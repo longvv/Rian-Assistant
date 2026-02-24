@@ -6,8 +6,38 @@
       "restrict_to_workspace": true,
       "max_tokens": 8192,
       "max_tool_iterations": 20
-    }
+    },
+    "list": [
+      {
+        "id": "gateway",
+        "default": true,
+        "name": "Gateway Router",
+        "model": {"primary": "llama-3.2-3b-instruct:free"},
+        "subagents": {
+          "allow_agents": ["orchestrator"]
+        }
+      },
+      {
+        "id": "orchestrator",
+        "name": "Orchestrator Agent",
+        "model": {"primary": "trinity-large-preview:free"},
+        "subagents": {
+          "allow_agents": ["worker"]
+        }
+      },
+      {
+        "id": "worker",
+        "name": "Worker Agent",
+        "model": {"primary": "nemotron-3-nano-30b:free"}
+      }
+    ]
   },
+  "bindings": [
+    {
+      "agent_id": "gateway",
+      "match": {"channel": "telegram"}
+    }
+  ],
   "model_list": [
     {
       "model_name": "nemotron-3-nano-30b:free",

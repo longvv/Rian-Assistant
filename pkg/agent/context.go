@@ -16,6 +16,7 @@ import (
 
 type ContextBuilder struct {
 	workspace    string
+	agentID      string
 	skillsLoader *skills.SkillsLoader
 	memory       *MemoryStore
 	tools        *tools.ToolRegistry // Direct reference to tool registry
@@ -29,7 +30,7 @@ func getGlobalConfigDir() string {
 	return filepath.Join(home, ".picoclaw")
 }
 
-func NewContextBuilder(workspace string) *ContextBuilder {
+func NewContextBuilder(workspace, agentID string) *ContextBuilder {
 	// builtin skills: skills directory in current project
 	// Use the skills/ directory under the current working directory
 	wd, _ := os.Getwd()
@@ -38,6 +39,7 @@ func NewContextBuilder(workspace string) *ContextBuilder {
 
 	return &ContextBuilder{
 		workspace:    workspace,
+		agentID:      agentID,
 		skillsLoader: skills.NewSkillsLoader(workspace, globalSkillsDir, builtinSkillsDir),
 		memory:       NewMemoryStore(workspace),
 	}
@@ -144,6 +146,10 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 		"SOUL.md",
 		"USER.md",
 		"IDENTITY.md",
+	}
+
+	if cb.agentID != "" && cb.agentID != "main" {
+		bootstrapFiles = append([]string{cb.agentID + "_IDENTITY.md"}, bootstrapFiles...)
 	}
 
 	var result string

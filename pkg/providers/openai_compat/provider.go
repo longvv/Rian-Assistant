@@ -225,11 +225,14 @@ func normalizeModel(model, apiBase string) string {
 		return model
 	}
 
+	prefix := strings.ToLower(model[:idx])
 	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+		if prefix == "openrouter" {
+			return model[idx+1:] // strip "openrouter/"
+		}
 		return model
 	}
 
-	prefix := strings.ToLower(model[:idx])
 	switch prefix {
 	case "moonshot", "nvidia", "groq", "ollama", "deepseek", "google", "openrouter", "zhipu":
 		return model[idx+1:]

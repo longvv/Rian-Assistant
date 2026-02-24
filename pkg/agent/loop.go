@@ -130,6 +130,18 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		// Spawn tool with allowlist checker
 		subagentManager := tools.NewSubagentManager(provider, agent.Model, agent.Workspace, msgBus)
 		subagentManager.SetLLMOptions(agent.MaxTokens, agent.Temperature)
+		subagentManager.SetAgentModelLookup(func(targetAgentID string) string {
+			if targetAgent, ok := registry.GetAgent(targetAgentID); ok {
+				return targetAgent.Model
+			}
+			return ""
+		})
+		subagentManager.SetAgentPromptLookup(func(targetAgentID string) string {
+			if targetAgent, ok := registry.GetAgent(targetAgentID); ok {
+				return targetAgent.ContextBuilder.BuildSystemPrompt()
+			}
+			return ""
+		})
 		spawnTool := tools.NewSpawnTool(subagentManager)
 		currentAgentID := agentID
 		spawnTool.SetAllowlistChecker(func(targetAgentID string) bool {

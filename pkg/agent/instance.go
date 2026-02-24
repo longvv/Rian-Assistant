@@ -43,7 +43,7 @@ func NewAgentInstance(
 	workspace := resolveAgentWorkspace(agentCfg, defaults)
 	os.MkdirAll(workspace, 0755)
 
-	model := resolveAgentModel(agentCfg, defaults)
+	model := resolveAgentModel(agentCfg, defaults, cfg)
 	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
 
 	restrict := defaults.RestrictToWorkspace
@@ -58,9 +58,6 @@ func NewAgentInstance(
 	sessionsDir := filepath.Join(workspace, "sessions")
 	sessionsManager := session.NewSessionManager(sessionsDir)
 
-	contextBuilder := NewContextBuilder(workspace)
-	contextBuilder.SetToolsRegistry(toolsRegistry)
-
 	agentID := routing.DefaultAgentID
 	agentName := ""
 	var subagents *config.SubagentsConfig
@@ -72,6 +69,9 @@ func NewAgentInstance(
 		subagents = agentCfg.Subagents
 		skillsFilter = agentCfg.Skills
 	}
+
+	contextBuilder := NewContextBuilder(workspace, agentID)
+	contextBuilder.SetToolsRegistry(toolsRegistry)
 
 	maxIter := defaults.MaxToolIterations
 	if maxIter == 0 {
@@ -137,11 +137,19 @@ func resolveAgentWorkspace(agentCfg *config.AgentConfig, defaults *config.AgentD
 }
 
 // resolveAgentModel resolves the primary model for an agent.
-func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults, cfg *config.Config) string {
+	model := defaults.Model
 	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
-		return strings.TrimSpace(agentCfg.Model.Primary)
+		model = strings.TrimSpace(agentCfg.Model.Primary)
 	}
-	return defaults.Model
+
+	if cfg != nil {
+		if mc, err := cfg.GetModelConfig(model); err == nil {
+			return mc.Model
+		}
+	}
+
+	return model
 }
 
 // resolveAgentFallbacks resolves the fallback models for an agent.

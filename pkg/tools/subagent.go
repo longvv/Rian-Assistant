@@ -28,19 +28,21 @@ type SubagentTask struct {
 const completedTaskTTL = 10 * time.Minute
 
 type SubagentManager struct {
-	tasks          map[string]*SubagentTask
-	mu             sync.RWMutex
-	provider       providers.LLMProvider
-	defaultModel   string
-	bus            *bus.MessageBus
-	workspace      string
-	tools          *ToolRegistry
-	maxIterations  int
-	maxTokens      int
-	temperature    float64
-	hasMaxTokens   bool
-	hasTemperature bool
-	nextID         int
+	tasks             map[string]*SubagentTask
+	mu                sync.RWMutex
+	provider          providers.LLMProvider
+	defaultModel      string
+	bus               *bus.MessageBus
+	workspace         string
+	tools             *ToolRegistry
+	maxIterations     int
+	maxTokens         int
+	temperature       float64
+	hasMaxTokens      bool
+	hasTemperature    bool
+	nextID            int
+	agentModelLookup  func(string) string
+	agentPromptLookup func(string) string
 }
 
 func NewSubagentManager(provider providers.LLMProvider, defaultModel, workspace string, bus *bus.MessageBus) *SubagentManager {
@@ -64,6 +66,20 @@ func (sm *SubagentManager) SetLLMOptions(maxTokens int, temperature float64) {
 	sm.hasMaxTokens = true
 	sm.temperature = temperature
 	sm.hasTemperature = true
+}
+
+// SetAgentModelLookup sets the callback to lookup agent model config
+func (sm *SubagentManager) SetAgentModelLookup(fn func(string) string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.agentModelLookup = fn
+}
+
+// SetAgentPromptLookup sets the callback to lookup agent system prompt
+func (sm *SubagentManager) SetAgentPromptLookup(fn func(string) string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sm.agentPromptLookup = fn
 }
 
 // SetTools sets the tool registry for subagent execution.
@@ -120,6 +136,16 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 You have access to tools - use them as needed to complete your task.
 After completing the task, provide a clear summary of what was done.`
 
+	sm.mu.RLock()
+	lookupPrompt := sm.agentPromptLookup
+	sm.mu.RUnlock()
+
+	if lookupPrompt != nil && task.AgentID != "" {
+		if specificPrompt := lookupPrompt(task.AgentID); specificPrompt != "" {
+			systemPrompt = specificPrompt
+		}
+	}
+
 	messages := []providers.Message{
 		{
 			Role:    "system",
@@ -150,7 +176,15 @@ After completing the task, provide a clear summary of what was done.`
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	lookup := sm.agentModelLookup
 	sm.mu.RUnlock()
+
+	model := sm.defaultModel
+	if lookup != nil && task.AgentID != "" {
+		if specificModel := lookup(task.AgentID); specificModel != "" {
+			model = specificModel
+		}
+	}
 
 	var llmOptions map[string]any
 	if hasMaxTokens || hasTemperature {
@@ -165,7 +199,7 @@ After completing the task, provide a clear summary of what was done.`
 
 	loopResult, err := RunToolLoop(ctx, ToolLoopConfig{
 		Provider:      sm.provider,
-		Model:         sm.defaultModel,
+		Model:         model,
 		Tools:         tools,
 		MaxIterations: maxIter,
 		LLMOptions:    llmOptions,
@@ -292,6 +326,10 @@ func (t *SubagentTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Optional short label for the task (for display)",
 			},
+			"agent_id": map[string]interface{}{
+				"type":        "string",
+				"description": "Optional target agent ID to delegate the task to",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -315,10 +353,25 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Build messages for subagent
+	systemPrompt := "You are a subagent. Complete the given task independently and provide a clear, concise result."
+
+	sm := t.manager
+	sm.mu.RLock()
+	lookupPrompt := sm.agentPromptLookup
+	sm.mu.RUnlock()
+
+	if lookupPrompt != nil && args["agent_id"] != nil {
+		if agentID, ok := args["agent_id"].(string); ok && agentID != "" {
+			if specificPrompt := lookupPrompt(agentID); specificPrompt != "" {
+				systemPrompt = specificPrompt
+			}
+		}
+	}
+
 	messages := []providers.Message{
 		{
 			Role:    "system",
-			Content: "You are a subagent. Complete the given task independently and provide a clear, concise result.",
+			Content: systemPrompt,
 		},
 		{
 			Role:    "user",
@@ -327,7 +380,6 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 	}
 
 	// Use RunToolLoop to execute with tools (same as async SpawnTool)
-	sm := t.manager
 	sm.mu.RLock()
 	tools := sm.tools
 	maxIter := sm.maxIterations
@@ -335,7 +387,17 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 	temperature := sm.temperature
 	hasMaxTokens := sm.hasMaxTokens
 	hasTemperature := sm.hasTemperature
+	lookup := sm.agentModelLookup
 	sm.mu.RUnlock()
+
+	model := sm.defaultModel
+	if lookup != nil && args["agent_id"] != nil {
+		if agentID, ok := args["agent_id"].(string); ok && agentID != "" {
+			if specificModel := lookup(agentID); specificModel != "" {
+				model = specificModel
+			}
+		}
+	}
 
 	var llmOptions map[string]any
 	if hasMaxTokens || hasTemperature {
@@ -350,7 +412,7 @@ func (t *SubagentTool) Execute(ctx context.Context, args map[string]interface{})
 
 	loopResult, err := RunToolLoop(ctx, ToolLoopConfig{
 		Provider:      sm.provider,
-		Model:         sm.defaultModel,
+		Model:         model,
 		Tools:         tools,
 		MaxIterations: maxIter,
 		LLMOptions:    llmOptions,
