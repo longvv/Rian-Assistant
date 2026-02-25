@@ -274,4 +274,7 @@ func TestNormalizeModel_UsesAPIBase(t *testing.T) {
 	if got := normalizeModel("openrouter/auto", "https://openrouter.ai/api/v1"); got != "openrouter/auto" {
 		t.Fatalf("normalizeModel(openrouter) = %q, want %q", got, "openrouter/auto")
 	}
+	if got := normalizeModel("openrouter/meta-llama/llama-3", "https://openrouter.ai/api/v1"); got != "meta-llama/llama-3" {
+		t.Fatalf("normalizeModel(openrouter prefix) = %q, want %q", got, "meta-llama/llama-3")
+	}
 }
