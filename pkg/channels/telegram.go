@@ -134,6 +134,33 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
 
+	bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+		if err := c.bot.AnswerCallbackQuery(context.Background(), tu.CallbackQuery(query.ID)); err != nil {
+			logger.ErrorCF("telegram", "Failed to answer callback query", map[string]interface{}{"error": err.Error()})
+		}
+
+		if query.Data != "" {
+			senderID := fmt.Sprintf("%d", query.From.ID)
+			if query.From.Username != "" {
+				senderID = fmt.Sprintf("%d|%s", query.From.ID, query.From.Username)
+			}
+			var chatID string
+			if query.Message != nil {
+				chatID = fmt.Sprintf("%d", query.Message.GetChat().ID)
+			} else {
+				chatID = fmt.Sprintf("%d", query.From.ID)
+			}
+
+			metadata := map[string]string{
+				"user_id":     fmt.Sprintf("%d", query.From.ID),
+				"username":    query.From.Username,
+				"is_callback": "true",
+			}
+			c.HandleMessage(senderID, chatID, query.Data, nil, metadata)
+		}
+		return nil
+	})
+
 	c.setRunning(true)
 	logger.InfoCF("telegram", "Telegram bot connected", map[string]interface{}{
 		"username": c.bot.Username(),
@@ -160,6 +187,41 @@ const telegramHTMLLimit = 4096
 // telegramCaptionLimit is the max caption length for Telegram documents (API limit: 1024).
 const telegramCaptionLimit = 900
 
+var inlineBtnRegex = regexp.MustCompile(`\[([^\]]+)\]\(btn:([^)]+)\)`)
+
+func extractInlineKeyboard(content string) (string, *telego.InlineKeyboardMarkup) {
+	matches := inlineBtnRegex.FindAllStringSubmatch(content, -1)
+	if len(matches) == 0 {
+		return content, nil
+	}
+
+	var buttons []telego.InlineKeyboardButton
+	for _, match := range matches {
+		label := match[1]
+		data := strings.TrimSpace(match[2])
+		if len(data) > 64 {
+			logger.WarnCF("telegram", "Callback data too long", map[string]interface{}{"data": data})
+			data = data[:64]
+		}
+		buttons = append(buttons, tu.InlineKeyboardButton(label).WithCallbackData(data))
+	}
+
+	var layout [][]telego.InlineKeyboardButton
+	for i := 0; i < len(buttons); i += 2 {
+		end := i + 2
+		if end > len(buttons) {
+			end = len(buttons)
+		}
+		layout = append(layout, buttons[i:end])
+	}
+
+	newContent := inlineBtnRegex.ReplaceAllString(content, "")
+	newContent = strings.TrimSpace(newContent)
+
+	keyboard := tu.InlineKeyboard(layout...)
+	return newContent, keyboard
+}
+
 func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	if !c.IsRunning() {
 		return fmt.Errorf("telegram bot not running")
@@ -178,6 +240,10 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		c.stopThinking.Delete(msg.ChatID)
 	}
 
+	// Extract inline keyboard buttons before parsing Markdown
+	var keyboard *telego.InlineKeyboardMarkup
+	msg.Content, keyboard = extractInlineKeyboard(msg.Content)
+
 	// Convert markdown to HTML once — its length determines which path we take.
 	htmlContent := markdownToTelegramHTML(msg.Content)
 	fits := len(htmlContent) <= telegramHTMLLimit
@@ -187,6 +253,9 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 		if fits {
 			// Short enough: edit the placeholder in-place
 			editMsg := tu.EditMessageText(tu.ID(chatID), pID.(int), htmlContent)
+			if keyboard != nil {
+				editMsg.ReplyMarkup = keyboard
+			}
 			editMsg.ParseMode = telego.ModeHTML
 			if _, err = c.bot.EditMessageText(ctx, editMsg); err == nil {
 				return nil
@@ -202,10 +271,13 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	}
 
 	if !fits {
-		return c.sendAsMarkdownFile(ctx, chatID, msg.Content)
+		return c.sendAsMarkdownFile(ctx, chatID, msg.Content, keyboard)
 	}
 
 	tgMsg := tu.Message(tu.ID(chatID), htmlContent)
+	if keyboard != nil {
+		tgMsg.ReplyMarkup = keyboard
+	}
 	tgMsg.ParseMode = telego.ModeHTML
 
 	if _, err = c.bot.SendMessage(ctx, tgMsg); err != nil {
@@ -221,12 +293,15 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 }
 
 // sendAsMarkdownFile sends content as a response.md document with a short caption preview.
-func (c *TelegramChannel) sendAsMarkdownFile(ctx context.Context, chatID int64, content string) error {
+func (c *TelegramChannel) sendAsMarkdownFile(ctx context.Context, chatID int64, content string, keyboard *telego.InlineKeyboardMarkup) error {
 	caption := buildCaption(content, telegramCaptionLimit)
 	htmlCaption := markdownToTelegramHTML(caption)
 
 	docParams := tu.Document(tu.ID(chatID), tu.FileFromBytes([]byte(content), "response.md"))
 	docParams.Caption = htmlCaption
+	if keyboard != nil {
+		docParams.ReplyMarkup = keyboard
+	}
 	docParams.ParseMode = telego.ModeHTML
 
 	if _, err := c.bot.SendDocument(ctx, docParams); err != nil {

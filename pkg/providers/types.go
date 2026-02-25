@@ -32,6 +32,7 @@ const (
 	FailoverTimeout    FailoverReason = "timeout"
 	FailoverFormat     FailoverReason = "format"
 	FailoverOverloaded FailoverReason = "overloaded"
+	FailoverNotFound   FailoverReason = "not_found"
 	FailoverUnknown    FailoverReason = "unknown"
 )
 

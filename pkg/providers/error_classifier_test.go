@@ -39,6 +39,7 @@ func TestClassifyError_StatusCodes(t *testing.T) {
 		{401, FailoverAuth},
 		{403, FailoverAuth},
 		{402, FailoverBilling},
+		{404, FailoverNotFound},
 		{408, FailoverTimeout},
 		{429, FailoverRateLimit},
 		{400, FailoverFormat},
@@ -207,6 +208,26 @@ func TestClassifyError_FormatPatterns(t *testing.T) {
 	}
 }
 
+func TestClassifyError_NotFoundPatterns(t *testing.T) {
+	patterns := []string{
+		"No endpoints found that support tool use",
+		"model not found",
+		"status 404 not found",
+	}
+
+	for _, msg := range patterns {
+		err := errors.New(msg)
+		result := ClassifyError(err, "openrouter", "auto")
+		if result == nil {
+			t.Errorf("pattern %q: expected non-nil", msg)
+			continue
+		}
+		if result.Reason != FailoverNotFound {
+			t.Errorf("pattern %q: reason = %q, want not_found", msg, result.Reason)
+		}
+	}
+}
+
 func TestClassifyError_ImageDimensionError(t *testing.T) {
 	err := errors.New("image dimensions exceed max allowed 2048x2048")
 	result := ClassifyError(err, "openai", "gpt-4o")
@@ -264,6 +285,7 @@ func TestFailoverError_IsRetriable(t *testing.T) {
 		{FailoverBilling, true},
 		{FailoverTimeout, true},
 		{FailoverOverloaded, true},
+		{FailoverNotFound, true},
 		{FailoverFormat, false},
 		{FailoverUnknown, true},
 	}

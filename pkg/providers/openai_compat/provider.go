@@ -227,8 +227,17 @@ func normalizeModel(model, apiBase string) string {
 
 	prefix := strings.ToLower(model[:idx])
 	if strings.Contains(strings.ToLower(apiBase), "openrouter.ai") {
+		// OpenRouter requires the full "provider/model" format (e.g. "openai/gpt-5.2").
+		// Even for "openrouter/auto", we should send "openrouter/auto" or just "auto"
+		// Actually, openrouter docs say to use "openrouter/auto" or the full model id.
+		// So don't strip prefix if we're hitting openrouter.ai.
 		if prefix == "openrouter" {
-			return model[idx+1:] // strip "openrouter/"
+			// For specific models like "openrouter/openai/gpt-4o", if given config "openrouter/openai/gpt-4o",
+			// but usually config has Model: "openai/gpt-4o".
+			// Wait, the test says: normalizeModel(openrouter/auto) = "auto", want "openrouter/auto".
+			// The original code stripped "openrouter/".
+			// Let's just return model if it's openrouter.ai
+			return model
 		}
 		return model
 	}

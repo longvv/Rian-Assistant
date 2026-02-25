@@ -78,6 +78,12 @@ var (
 		substr("invalid request format"),
 	}
 
+	notFoundPatterns = []errorPattern{
+		rxp(`\b404\b`),
+		substr("no endpoints found"),
+		substr("model not found"),
+	}
+
 	imageDimensionPatterns = []errorPattern{
 		rxp(`image dimensions exceed max`),
 	}
@@ -161,6 +167,8 @@ func classifyByStatus(status int) FailoverReason {
 		return FailoverAuth
 	case status == 402:
 		return FailoverBilling
+	case status == 404:
+		return FailoverNotFound
 	case status == 408:
 		return FailoverTimeout
 	case status == 429:
@@ -190,6 +198,9 @@ func classifyByMessage(msg string) FailoverReason {
 	}
 	if matchesAny(msg, authPatterns) {
 		return FailoverAuth
+	}
+	if matchesAny(msg, notFoundPatterns) {
+		return FailoverNotFound
 	}
 	if matchesAny(msg, formatPatterns) {
 		return FailoverFormat

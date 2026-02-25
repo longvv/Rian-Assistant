@@ -138,7 +138,7 @@ func registerSharedTools(cfg *config.Config, msgBus *bus.MessageBus, registry *A
 		})
 		subagentManager.SetAgentPromptLookup(func(targetAgentID string) string {
 			if targetAgent, ok := registry.GetAgent(targetAgentID); ok {
-				return targetAgent.ContextBuilder.BuildSystemPrompt()
+				return targetAgent.ContextBuilder.BuildSystemPrompt("")
 			}
 			return ""
 		})

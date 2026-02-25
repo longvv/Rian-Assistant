@@ -50,13 +50,21 @@ func (cb *ContextBuilder) SetToolsRegistry(registry *tools.ToolRegistry) {
 	cb.tools = registry
 }
 
-func (cb *ContextBuilder) getIdentity() string {
+func (cb *ContextBuilder) getIdentity(chatID string) string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))
-	runtime := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
+	runtimeInfo := fmt.Sprintf("%s %s, Go %s", runtime.GOOS, runtime.GOARCH, runtime.Version())
 
 	// Build tools section dynamically
 	toolsSection := cb.buildToolsSection()
+
+	memoryPath := "MEMORY.md"
+	dailyPath := "YYYYMM/YYYYMMDD.md"
+	if chatID != "" {
+		safeChatID := strings.ReplaceAll(chatID, "/", "_")
+		memoryPath = "chat_" + safeChatID + "/MEMORY.md"
+		dailyPath = "chat_" + safeChatID + "/YYYYMM/YYYYMMDD.md"
+	}
 
 	return fmt.Sprintf(`# picoclaw 🦞
 
@@ -70,8 +78,8 @@ You are picoclaw, a helpful AI assistant.
 
 ## Workspace
 Your workspace is at: %s
-- Memory: %s/memory/MEMORY.md
-- Daily Notes: %s/memory/YYYYMM/YYYYMMDD.md
+- Memory: %s/memory/%s
+- Daily Notes: %s/memory/%s
 - Skills: %s/skills/{skill-name}/SKILL.md
 
 %s
@@ -82,8 +90,8 @@ Your workspace is at: %s
 
 2. **Be helpful and accurate** - When using tools, briefly explain what you're doing.
 
-3. **Memory** - When remembering something, write to %s/memory/MEMORY.md`,
-		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
+3. **Memory** - When remembering something, write to %s/memory/%s`,
+		now, runtimeInfo, workspacePath, workspacePath, memoryPath, workspacePath, dailyPath, workspacePath, toolsSection, workspacePath, memoryPath)
 }
 
 func (cb *ContextBuilder) buildToolsSection() string {
@@ -108,11 +116,11 @@ func (cb *ContextBuilder) buildToolsSection() string {
 	return sb.String()
 }
 
-func (cb *ContextBuilder) BuildSystemPrompt() string {
+func (cb *ContextBuilder) BuildSystemPrompt(chatID string) string {
 	parts := []string{}
 
 	// Core identity section
-	parts = append(parts, cb.getIdentity())
+	parts = append(parts, cb.getIdentity(chatID))
 
 	// Bootstrap files
 	bootstrapContent := cb.LoadBootstrapFiles()
@@ -131,7 +139,7 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 	}
 
 	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
+	memoryContext := cb.memory.GetMemoryContext(chatID)
 	if memoryContext != "" {
 		parts = append(parts, "# Memory\n\n"+memoryContext)
 	}
@@ -166,7 +174,7 @@ func (cb *ContextBuilder) LoadBootstrapFiles() string {
 func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string) []providers.Message {
 	messages := []providers.Message{}
 
-	systemPrompt := cb.BuildSystemPrompt()
+	systemPrompt := cb.BuildSystemPrompt(chatID)
 
 	// Add Current Session info if provided
 	if channel != "" && chatID != "" {
