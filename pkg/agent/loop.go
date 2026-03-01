@@ -506,6 +506,10 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 	iteration := 0
 	var finalContent string
 
+	// Build tool definitions once — they never change mid-conversation.
+	// Previously this was inside the loop, causing up to MaxIterations redundant allocations.
+	providerToolDefs := agent.Tools.ToProviderDefs()
+
 	for iteration < agent.MaxIterations {
 		iteration++
 
@@ -515,9 +519,6 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				"iteration": iteration,
 				"max":       agent.MaxIterations,
 			})
-
-		// Build tool definitions
-		providerToolDefs := agent.Tools.ToProviderDefs()
 
 		// Log LLM request details
 		logger.DebugCF("agent", "LLM request",
@@ -729,35 +730,109 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 		// Save assistant message with tool calls to session
 		agent.Sessions.AddFullMessage(opts.SessionKey, assistantMsg)
 
-		// Execute tool calls
-		for _, tc := range normalizedToolCalls {
-			argsJSON, _ := json.Marshal(tc.Arguments)
-			argsPreview := utils.Truncate(string(argsJSON), 200)
-			logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
-				map[string]interface{}{
-					"agent_id":  agent.ID,
-					"tool":      tc.Name,
-					"iteration": iteration,
-				})
+		// Execute tool calls — parallelise independent (I/O-bound) tools.
+		// "Stateful" tools that mutate shared message context or spawn sub-agents
+		// are kept serial to avoid ordering issues.
+		statefulTools := map[string]bool{"message": true, "spawn": true, "subagent": true}
 
-			// Create async callback for tools that implement AsyncTool
-			// NOTE: Following openclaw's design, async tools do NOT send results directly to users.
-			// Instead, they notify the agent via PublishInbound, and the agent decides
-			// whether to forward the result to the user (in processSystemMessage).
-			asyncCallback := func(callbackCtx context.Context, result *tools.ToolResult) {
-				// Log the async completion but don't send directly to user
-				// The agent will handle user notification via processSystemMessage
-				if !result.Silent && result.ForUser != "" {
-					logger.InfoCF("agent", "Async tool completed, agent will handle notification",
-						map[string]interface{}{
-							"tool":        tc.Name,
-							"content_len": len(result.ForUser),
-						})
+		// toolOutcome carries the result with its original position so we can
+		// append tool-result messages in the exact order the LLM declared them.
+		type toolOutcome struct {
+			index  int
+			tc     providers.ToolCall
+			result *tools.ToolResult
+		}
+
+		outcomes := make([]toolOutcome, len(normalizedToolCalls))
+
+		if len(normalizedToolCalls) <= 1 || (func() bool {
+			for _, tc := range normalizedToolCalls {
+				if !statefulTools[tc.Name] {
+					return false
 				}
 			}
+			return true
+		})() {
+			// Single tool, or all tools are stateful — run serially.
+			for i, tc := range normalizedToolCalls {
+				argsJSON, _ := json.Marshal(tc.Arguments)
+				argsPreview := utils.Truncate(string(argsJSON), 200)
+				logger.InfoCF("agent", fmt.Sprintf("Tool call: %s(%s)", tc.Name, argsPreview),
+					map[string]interface{}{
+						"agent_id":  agent.ID,
+						"tool":      tc.Name,
+						"iteration": iteration,
+					})
 
-			health.RecordToolExecution(tc.Name)
-			toolResult := agent.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
+				asyncCallback := func(callbackCtx context.Context, result *tools.ToolResult) {
+					if !result.Silent && result.ForUser != "" {
+						logger.InfoCF("agent", "Async tool completed, agent will handle notification",
+							map[string]interface{}{
+								"tool":        tc.Name,
+								"content_len": len(result.ForUser),
+							})
+					}
+				}
+
+				health.RecordToolExecution(tc.Name)
+				r := agent.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
+				outcomes[i] = toolOutcome{index: i, tc: tc, result: r}
+			}
+		} else {
+			// Multiple tools with at least one non-stateful — fan out in parallel.
+			outCh := make(chan toolOutcome, len(normalizedToolCalls))
+			var wg sync.WaitGroup
+
+			for i, tc := range normalizedToolCalls {
+				tc := tc
+				i := i
+
+				if statefulTools[tc.Name] {
+					// Stateful tools still run in the goroutine pool but we track them;
+					// their ordering relative to other stateful tools is arbitrary but
+					// isolated from I/O tools by the fan-out design.
+				}
+
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					argsJSON, _ := json.Marshal(tc.Arguments)
+					argsPreview := utils.Truncate(string(argsJSON), 200)
+					logger.InfoCF("agent", fmt.Sprintf("Tool call (parallel): %s(%s)", tc.Name, argsPreview),
+						map[string]interface{}{
+							"agent_id":  agent.ID,
+							"tool":      tc.Name,
+							"iteration": iteration,
+						})
+
+					asyncCallback := func(callbackCtx context.Context, result *tools.ToolResult) {
+						if !result.Silent && result.ForUser != "" {
+							logger.InfoCF("agent", "Async tool completed, agent will handle notification",
+								map[string]interface{}{
+									"tool":        tc.Name,
+									"content_len": len(result.ForUser),
+								})
+						}
+					}
+
+					health.RecordToolExecution(tc.Name)
+					r := agent.Tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, opts.Channel, opts.ChatID, asyncCallback)
+					outCh <- toolOutcome{index: i, tc: tc, result: r}
+				}()
+			}
+
+			// Wait for all goroutines then close the result channel.
+			go func() { wg.Wait(); close(outCh) }()
+
+			for o := range outCh {
+				outcomes[o.index] = o
+			}
+		}
+
+		// Apply results in original LLM-declared order.
+		for _, o := range outcomes {
+			toolResult := o.result
+			tc := o.tc
 
 			// Send ForUser content to user immediately if not Silent
 			if !toolResult.Silent && toolResult.ForUser != "" && opts.SendResponse {

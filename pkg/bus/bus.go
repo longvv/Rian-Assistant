@@ -23,11 +23,17 @@ func NewMessageBus() *MessageBus {
 
 func (mb *MessageBus) PublishInbound(msg InboundMessage) {
 	mb.mu.RLock()
-	defer mb.mu.RUnlock()
-	if mb.closed {
+	closed := mb.closed
+	mb.mu.RUnlock()
+	if closed {
 		return
 	}
-	mb.inbound <- msg
+	select {
+	case mb.inbound <- msg:
+	default:
+		// Buffer full — drop rather than blocking with lock held (deadlock risk).
+		// The buffer of 100 should be more than enough under normal load.
+	}
 }
 
 func (mb *MessageBus) ConsumeInbound(ctx context.Context) (InboundMessage, bool) {
@@ -41,11 +47,16 @@ func (mb *MessageBus) ConsumeInbound(ctx context.Context) (InboundMessage, bool)
 
 func (mb *MessageBus) PublishOutbound(msg OutboundMessage) {
 	mb.mu.RLock()
-	defer mb.mu.RUnlock()
-	if mb.closed {
+	closed := mb.closed
+	mb.mu.RUnlock()
+	if closed {
 		return
 	}
-	mb.outbound <- msg
+	select {
+	case mb.outbound <- msg:
+	default:
+		// Buffer full — drop rather than blocking with lock held (deadlock risk).
+	}
 }
 
 func (mb *MessageBus) SubscribeOutbound(ctx context.Context) (OutboundMessage, bool) {

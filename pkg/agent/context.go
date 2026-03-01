@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/logger"
@@ -14,12 +15,23 @@ import (
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
+// promptCacheEntry holds a cached system prompt with its invalidation keys.
+type promptCacheEntry struct {
+	content     string
+	minute      string    // time.Now().Format("2006-01-02 15:04") at build time
+	memoryMtime time.Time // mtime of the memory file when cached
+}
+
 type ContextBuilder struct {
 	workspace    string
 	agentID      string
 	skillsLoader *skills.SkillsLoader
 	memory       *MemoryStore
 	tools        *tools.ToolRegistry // Direct reference to tool registry
+
+	// System prompt cache — avoids disk reads on every LLM call.
+	// Key: chatID (string), Value: promptCacheEntry
+	promptCache sync.Map
 }
 
 func getGlobalConfigDir() string {
@@ -116,7 +128,8 @@ func (cb *ContextBuilder) buildToolsSection() string {
 	return sb.String()
 }
 
-func (cb *ContextBuilder) BuildSystemPrompt(chatID string) string {
+// buildSystemPromptUncached builds the full system prompt without cache.
+func (cb *ContextBuilder) buildSystemPromptUncached(chatID string) string {
 	parts := []string{}
 
 	// Core identity section
@@ -146,6 +159,40 @@ The following skills extend your capabilities. To use a skill, read its SKILL.md
 
 	// Join with "---" separator
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+// memoryFileMtime returns the modification time of the memory file for chatID.
+// Returns zero time if the file doesn't exist.
+func (cb *ContextBuilder) memoryFileMtime(chatID string) time.Time {
+	memoryFile := cb.memory.getMemoryFile(chatID)
+	if info, err := os.Stat(memoryFile); err == nil {
+		return info.ModTime().Truncate(time.Second)
+	}
+	return time.Time{}
+}
+
+// BuildSystemPrompt returns the system prompt for the given chatID.
+// Results are cached per (chatID, minute, memory-mtime) to avoid repeated
+// disk reads (4 bootstrap files + skills summary + memory) on every LLM call.
+func (cb *ContextBuilder) BuildSystemPrompt(chatID string) string {
+	nowMinute := time.Now().Format("2006-01-02 15:04")
+	mtime := cb.memoryFileMtime(chatID)
+
+	if v, ok := cb.promptCache.Load(chatID); ok {
+		entry := v.(promptCacheEntry)
+		if entry.minute == nowMinute && entry.memoryMtime.Equal(mtime) {
+			return entry.content
+		}
+	}
+
+	// Cache miss — rebuild
+	prompt := cb.buildSystemPromptUncached(chatID)
+	cb.promptCache.Store(chatID, promptCacheEntry{
+		content:     prompt,
+		minute:      nowMinute,
+		memoryMtime: mtime,
+	})
+	return prompt
 }
 
 func (cb *ContextBuilder) LoadBootstrapFiles() string {

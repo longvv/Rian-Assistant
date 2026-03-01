@@ -231,7 +231,7 @@ func (sm *SessionManager) Save(key string) error {
 	}
 	sm.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
