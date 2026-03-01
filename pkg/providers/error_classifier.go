@@ -81,6 +81,7 @@ var (
 	notFoundPatterns = []errorPattern{
 		rxp(`\b404\b`),
 		substr("no endpoints found"),
+		substr("no endpoints found that support tool use"),
 		substr("model not found"),
 	}
 

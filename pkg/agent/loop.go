@@ -654,6 +654,26 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, agent *AgentInstance, 
 				)
 				continue
 			}
+
+			// Detect models that don't support tool use (OpenRouter 404).
+			// Retry once without tools so the model can still answer conversationally.
+			isToolUseUnsupported := strings.Contains(errMsg, "no endpoints found that support tool use") ||
+				(strings.Contains(errMsg, "404") && strings.Contains(errMsg, "tool use"))
+			if isToolUseUnsupported && retry == 0 {
+				logger.WarnCF("agent", "Model does not support tool use, retrying without tools",
+					map[string]interface{}{
+						"agent_id":  agent.ID,
+						"model":     agent.Model,
+						"iteration": iteration,
+					})
+				response, err = agent.Provider.Chat(ctx, messages, nil, agent.Model, map[string]interface{}{
+					"max_tokens":  agent.MaxTokens,
+					"temperature": agent.Temperature,
+				})
+				if err == nil {
+					break
+				}
+			}
 			break
 		}
 

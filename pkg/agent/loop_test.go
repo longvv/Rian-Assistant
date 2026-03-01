@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -903,4 +904,156 @@ func TestMaybeSummarize_NoUserMessage(t *testing.T) {
 	if len(outboundMessages) > 0 {
 		t.Errorf("Expected no user-facing messages from maybeSummarize, got: %v", outboundMessages)
 	}
+}
+
+// toolUnsupportedMockProvider simulates a model that rejects tool use.
+// On calls WITH tools it returns the exact OpenRouter 404 error.
+// On calls WITHOUT tools it returns a plain conversational answer.
+type toolUnsupportedMockProvider struct {
+	callsWithTools    int
+	callsWithoutTools int
+}
+
+func (m *toolUnsupportedMockProvider) Chat(
+	ctx context.Context,
+	messages []providers.Message,
+	toolDefs []providers.ToolDefinition,
+	model string,
+	opts map[string]interface{},
+) (*providers.LLMResponse, error) {
+	if len(toolDefs) > 0 {
+		m.callsWithTools++
+		return nil, fmt.Errorf(`API request failed:
+  Status: 404
+  Body:   {"error":{"message":"No endpoints found that support tool use. To learn more about provider routing, visit: https://openrouter.ai/docs/guides/routing/provider-selection","code":404}}`)
+	}
+	m.callsWithoutTools++
+	return &providers.LLMResponse{
+		Content:      "Sorry, I cannot use tools, but here is my best answer.",
+		ToolCalls:    []providers.ToolCall{},
+		FinishReason: "stop",
+	}, nil
+}
+
+func (m *toolUnsupportedMockProvider) GetDefaultModel() string { return "no-tool-model" }
+
+// TestAgentLoop_ToolUseUnsupportedRetry verifies that when the LLM returns a
+// "No endpoints found that support tool use" 404, the agent automatically
+// retries the same model without tools and returns its conversational answer.
+func TestAgentLoop_ToolUseUnsupportedRetry(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-tool-unsupported-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "no-tool-model",
+				MaxTokens:         1024,
+				MaxToolIterations: 5,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &toolUnsupportedMockProvider{}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.ProcessDirectWithChannel(
+		context.Background(),
+		"tổng hợp thông tin tính báo Iran",
+		"test-session-tool-unsupported",
+		"telegram", "475776460",
+	)
+	if err != nil {
+		t.Fatalf("Expected success after no-tool retry, got error: %v", err)
+	}
+
+	// Must have tried WITH tools exactly once (first attempt)
+	if provider.callsWithTools != 1 {
+		t.Errorf("Expected 1 call with tools (initial attempt), got %d", provider.callsWithTools)
+	}
+
+	// Must have retried WITHOUT tools exactly once
+	if provider.callsWithoutTools != 1 {
+		t.Errorf("Expected 1 call without tools (retry), got %d", provider.callsWithoutTools)
+	}
+
+	// Response must be the fallback conversational answer
+	expected := "Sorry, I cannot use tools, but here is my best answer."
+	if response != expected {
+		t.Errorf("Expected %q, got %q", expected, response)
+	}
+}
+
+// TestAgentLoop_ToolUseUnsupported_Integration sends a real request to OpenRouter
+// using a model known to not support tool use and verifies the agent recovers.
+// Skipped when OPENROUTER_API_KEY is not set.
+func TestAgentLoop_ToolUseUnsupported_Integration(t *testing.T) {
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		// Try loading from .env in the project root (two levels up from pkg/agent)
+		envPath := filepath.Join("..", "..", ".env")
+		if data, err := os.ReadFile(envPath); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "OPENROUTER_API_KEY=") {
+					apiKey = strings.TrimPrefix(line, "OPENROUTER_API_KEY=")
+					break
+				}
+			}
+		}
+	}
+	if apiKey == "" {
+		t.Skip("OPENROUTER_API_KEY not set, skipping integration test")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "agent-integration-tool-unsupported-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Use the real OpenRouter provider pointing at llama-3.2-3b-instruct:free,
+	// which does not support tool use — exactly the model from config.json.
+	realProvider := providers.NewHTTPProvider(apiKey, "https://openrouter.ai/api/v1", "")
+
+	msgBus := bus.NewMessageBus()
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				Model:             "meta-llama/llama-3.2-3b-instruct:free",
+				MaxTokens:         512,
+				MaxToolIterations: 3,
+			},
+		},
+	}
+
+	al := NewAgentLoop(cfg, msgBus, realProvider)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	response, err := al.ProcessDirectWithChannel(
+		ctx,
+		"Say hello in one sentence.",
+		"integration-session",
+		"telegram", "test-chat",
+	)
+	if err != nil {
+		// 429 rate-limit on the free tier is transient infrastructure noise, not a logic bug.
+		// Skip instead of fail so CI stays green.
+		if strings.Contains(err.Error(), "429") || strings.Contains(strings.ToLower(err.Error()), "rate") {
+			t.Skipf("Rate-limited by OpenRouter free tier, skipping: %v", err)
+		}
+		t.Fatalf("Integration test failed (expected graceful tool-use fallback): %v", err)
+	}
+	if response == "" {
+		t.Error("Expected a non-empty response from the no-tool fallback path")
+	}
+	t.Logf("Integration response: %s", response)
 }
