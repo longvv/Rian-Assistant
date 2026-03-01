@@ -131,6 +131,26 @@ func (c *TelegramChannel) Start(ctx context.Context) error {
 	}, th.CommandEqual("list"))
 
 	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
+		// When the user uses /task, we inject the workflow command into their text
+		// so the AI agent recognizes it should trigger the github-end-to-end-task workflow.
+		args := strings.TrimSpace(strings.TrimPrefix(message.Text, "/task"))
+		if args == "" {
+			_, err := c.bot.SendMessage(ctx.Context(), &telego.SendMessageParams{
+				ChatID: telego.ChatID{ID: message.Chat.ID},
+				Text:   "Usage: /task [description of what needs to be done]",
+				ReplyParameters: &telego.ReplyParameters{
+					MessageID: message.MessageID,
+				},
+			})
+			return err
+		}
+
+		// Overwrite the message text with the workflow directive
+		message.Text = fmt.Sprintf("/github-end-to-end-task %s", args)
+		return c.handleMessage(ctx, &message)
+	}, th.CommandEqual("task"))
+
+	bh.HandleMessage(func(ctx *th.Context, message telego.Message) error {
 		return c.handleMessage(ctx, &message)
 	}, th.AnyMessage())
 

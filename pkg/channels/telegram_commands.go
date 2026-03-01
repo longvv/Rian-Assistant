@@ -65,6 +65,7 @@ func (c *cmd) Help(ctx context.Context, message telego.Message) error {
 /list [models|channels] - List available options
 /news - Fetch latest news
 /status - Show current bot status
+/task - Provide a task description to solve an issue autonomously
 	`
 	_, err := c.bot.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: message.Chat.ID},
