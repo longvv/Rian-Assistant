@@ -4,19 +4,21 @@ Information about the user context and preferences.
 
 ## Environment & Logistics
 
-- **OS**: macOS (M-series / Apple Silicon or Intel, standard Mac development environment)
-- **Timezone**: Set locally relative to GMT+7 (Asia/Ho_Chi_Minh or similar regional timezone).
-- **Communication style**: Professional, concise, tech-forward, straight to the point. No fluff.
+- **OS**: macOS (Apple Silicon — M-series)
+- **Timezone**: GMT+7 (Asia/Ho_Chi_Minh)
+- **Communication style**: Professional, extremely concise, tech-forward. No fluff, no re-stating what was just done.
 
 ## Development Preferences
 
-- **Tech Stack**: Heavy use of Go, Unix command-line tools, Docker, and standard web technologies (React/Node.js).
-- **Tooling**: Uses standard Unix terminals.
-- **Workflow**: Prefers automation, clean code architectures, and rigorous testing.
-- **System Interactions**: You prefer automated, friction-free background solutions (like background queueing) rather than throwing hard errors that block your work.
+- **Primary Language**: Go (1.23+) — modules, idiomatic concurrency, table-driven tests
+- **Tech Stack**: Go, Docker, Unix command-line tools, React/Node.js for web frontends
+- **AI Tooling**: Runs picoclaw locally as a personal AI agent; uses MCP for tool extensibility
+- **Workflow**: Automation-first. Prefers background queuing over hard errors. Clean architectures and rigorous testing.
+- **Code Reviews**: Expects the AI to identify performance issues, not just correctness issues.
 
-## Learning & Interaction Goals
+## Interaction Preferences
 
-- **Expectation**: Expects production-ready code snippets and architecture advice.
-- **Interaction**: Prefers the AI to be highly proactive—identifying issues before they happen and offering optimized alternatives to the requested solution.
-- **Goal**: Wants to multiply engineering output by offloading rote tasks, boilerplate generation, and complex debugging to the AI.
+- **Expectation**: Production-ready patches, not pseudo-code or "you could try…" responses.
+- **Proactivity**: AI should identify problems before they happen and offer optimised alternatives.
+- **Goal**: Multiply engineering output — offload rote tasks, boilerplate, and complex debugging to the AI without losing oversight.
+- **Feedback loop**: Prefer build+test verification after every code change before declaring it done.

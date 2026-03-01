@@ -92,7 +92,26 @@ Country info: population, capital, flag, languages.
 
 ---
 
-## 🕐 Time & Date
+## 🐹 Go Modules & Packages
+
+```
+GET https://pkg.go.dev/search?q={package}&m=package&limit=10
+```
+
+pkg.go.dev search — returns HTML, use `web_fetch` with Jina reader for clean markdown.
+
+```
+GET https://proxy.golang.org/{module}/@v/list
+GET https://proxy.golang.org/{module}/@latest
+```
+
+Official Go module proxy — returns plain-text version list or latest version JSON. No key needed.
+
+```
+GET https://api.github.com/repos/{owner}/{repo}/releases/latest
+```
+
+Latest release for any GitHub-hosted Go package.
 
 ```
 GET https://worldtimeapi.org/api/timezone/{timezone}

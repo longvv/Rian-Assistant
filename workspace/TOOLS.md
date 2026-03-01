@@ -2,17 +2,20 @@
 
 ## General Principles
 
-- **Read before Write**: ALWAYS use file viewing or listing tools to inspect a file or directory before attempting to edit or create it. Never hallucinate line numbers or structures.
+- **Read before Write**: ALWAYS inspect a file or directory with a viewing/listing tool before editing or creating it. Never hallucinate line numbers or structures.
 - **Search over Guessing**: Use search commands (`grep_search` or equivalent) to locate functions, variables, or error strings rather than guessing which file they reside in.
-- **Atomic Edits**: When making file edits, try to keep changes isolated and cohesive. Ensure code compiles and passes linters locally, explicitly if instructed.
+- **Atomic Edits**: Keep changes isolated and cohesive. Ensure code compiles and passes linters before declaring work done.
+- **Batch for Parallelism**: When multiple independent lookups are needed (file reads, web searches), issue them all in a single response turn so they execute concurrently. Never chain serial tool calls when parallel execution is possible.
+
+---
 
 ## Tool-Specific Rules
 
 ### 1. Bash / Shell Execution
 
-- Run commands strictly in the correct working directory.
-- For long-running process, use async tool calls or send them to the background if supported.
-- Never blindly run potentially destructive commands (`rm -rf`, `docker system prune`, etc.) without rigorous checks and explicit user confirmation if deemed high-risk.
+- Run commands in the correct working directory.
+- For long-running processes, use async execution or background mode.
+- Never run destructive commands (`rm -rf`, `docker system prune`, etc.) without explicit user confirmation.
 
 ### 1a. Shell Script Discipline (CRITICAL)
 
@@ -24,39 +27,41 @@
   - Arrays: `arr=(a b c)` → use positional params or a newline-delimited string
   - `[[ ... ]]` conditions → use `[ ... ]` (POSIX test)
   - Process substitution: `<(cmd)` → use a temp file or pipe
-- **Validate before running**: always run `sh -n <script>` after writing and confirm exit code is 0. If it fails, read the file back and fix the syntax.
-- **Verify writes**: after every `write_file`, immediately call `read_file` on the same path to confirm the file content is correct and complete before attempting to execute it.
-- **Don't loop on edit_file failures**: if `edit_file` fails with "old_text not found" twice, use `write_file` to rewrite the entire file instead of retrying the same edit.
-- **RSS/XML feeds**: use `grep -o '<title>[^<]*</title>' | sed ...` to extract titles. Do NOT use JSON-style grep (`"title":"..."`) on XML feeds — they produce no output.
+- **Validate before running**: always run `sh -n <script>` after writing and confirm exit code is 0.
+- **Verify writes**: after every `write_file`, immediately `read_file` to confirm the content is correct.
+- **Don't loop on edit_file failures**: if `edit_file` fails with "old_text not found" twice, use `write_file` to rewrite the entire file.
+- **RSS/XML feeds**: use `grep -o '<title>[^<]*</title>' | sed ...` to extract titles. Do NOT use JSON-style grep on XML — it produces no output.
 
-### 2. Code Modification
+### 2. Code Modification (Go)
 
-- Provide precise diffs.
-- Ensure that replacing text does not accidentally modify identical strings elsewhere in the file unless intentionally performing a global replace.
-- Preserve consistent indentation (tabs vs. spaces) and coding styles as found in the target file.
+- Provide precise diffs. Preserve consistent indentation and coding style.
+- After any edit: `go build ./pkg/... ./cmd/...` then `go test ./pkg/... -timeout 60s`.
+- **Concurrency rules**: never hold a mutex (`RLock`/`Lock`) across blocking I/O or channel sends — this causes deadlocks under back-pressure. Release the lock, then do the I/O.
+- **Hot path discipline**: hoist stable computations (tool definitions, rendered prompts) out of hot loops. Prefer `strings.Builder` over repeated string concatenation.
 
-### 3. Web Search (Optional)
+### 3. Web Search
 
-- Engage search functions when dealing with unfamiliar API changes, standard library edge cases, or external dependencies where knowledge might be outdated.
-- Always cross-reference multiple results when making critical architectural decisions based on search.
-- **SearXNG priority**: If `tools.web.searxng.enabled=true` in config, web_search uses SearXNG (multi-engine: Google + Bing + DuckDuckGo + Wikipedia) — no API key needed. Automatically uses a curated list of reliable public instances if no self-hosted URL is provided. Highest quality free search.
+- Use search when dealing with unfamiliar API changes, library edge cases, or external dependencies.
+- Cross-reference multiple results for critical architectural decisions.
+- **SearXNG priority**: If `tools.web.searxng.enabled=true` in config, web_search uses SearXNG (Google + Bing + DuckDuckGo + Wikipedia multi-engine).
 
 ### 4. Web Fetch (`web_fetch`) — Discipline Rules
 
-- **Jina AI Reader (default ON)**: `web_fetch` first tries `https://r.jina.ai/{url}` which returns clean markdown from any URL using Mozilla Readability. This is the preferred extractor — no JS-rendered content issues.
-- **Avoid JS-rendered sites for data.** Sites like `kitco.com`, `investing.com`, `tradingeconomics.com`, `coinmarketcap.com`, and similar financial dashboards render their data client-side via JavaScript. A plain HTTP fetch will return a skeleton HTML shell with no useful numeric data. Do NOT repeatedly fetch the same JS-rendered domain hoping for different results.
-- **Only fetch JSON/API endpoints.** Use `web_fetch` on URLs that look like REST/JSON endpoints: they contain `/api/`, `.json`, `/v1/`, `/v2/`, `/spot`, `/ticker`, or similar patterns. If unsure, use `web_search` instead.
-- **Bail after 2 failed domain attempts.** If `web_fetch` on a domain returns a result that is either very short (< 300 chars) or contains no numeric data relevant to the query, do NOT try other paths on that same domain. Mark that domain as "unhelpful" and move on.
-- **Results are cached** (10 min TTL): re-fetching the same URL within a session returns instantly from cache. No need to call `web_fetch` twice for the same URL.
-- **Check SOURCES.md first** for known-good free JSON APIs before trying to scrape any website.
+- **Jina AI Reader (default ON)**: `web_fetch` first tries `https://r.jina.ai/{url}` which returns clean markdown using Mozilla Readability. Preferred extractor — no JS issues.
+- **Avoid JS-rendered sites for data.** Sites like `kitco.com`, `investing.com`, `tradingeconomics.com`, `coinmarketcap.com` return skeleton HTML with no useful data.
+- **Only fetch JSON/API endpoints.** URLs with `/api/`, `.json`, `/v1/`, `/v2/`, `/spot`, `/ticker`, etc.
+- **Bail after 2 failed domain attempts.** If a domain returns <300 chars or no relevant data, move on.
+- **Results are cached** (10 min TTL): no need to re-fetch the same URL.
+- **Check SOURCES.md first** for known-good free JSON APIs before scraping any website.
 - **Financial/live data strategy:**
   1. Check `workspace/SOURCES.md` for a known-good API endpoint.
   2. Use `web_search` first — it returns summarised text including prices.
-  3. If a live number is needed, try a known-good JSON API (e.g. `https://open.er-api.com`, `https://api.coinbase.com/v2/prices/BTC-USD/spot`).
-  4. If no JSON API returns clean data within 2 attempts, present the `web_search` summary with a note that values may be slightly delayed. Do **not** exceed these limits chasing a perfect source.
+  3. If a live number is needed, try a known-good JSON API (e.g. `open.er-api.com`, `api.coinbase.com`).
+  4. If no clean JSON returns within 2 attempts, present the `web_search` summary. Do **not** exceed these limits.
 
 ### 5. Calculator (`calculator`) — Use for All Math
 
-- **Always use `calculator` for arithmetic** rather than mental math or shell commands. Available: `+`, `-`, `*`, `/`, `%`, `^`, `()`, `sqrt`, `abs`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `exp`, `floor`, `ceil`, `round`, `pi`, `e`, `phi`.
+- **Always use `calculator` for arithmetic** rather than mental math or shell commands.
+- Supports: `+`, `-`, `*`, `/`, `%`, `^`, `()`, `sqrt`, `abs`, `sin`, `cos`, `tan`, `log`, `log2`, `log10`, `exp`, `floor`, `ceil`, `round`, `pi`, `e`, `phi`.
 - Examples: `calculator("sqrt(144) + pi")`, `calculator("(1234 - 987) / 987 * 100")`
 - Zero overhead — no shell required, no side effects.
