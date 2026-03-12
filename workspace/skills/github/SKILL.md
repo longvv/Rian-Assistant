@@ -32,7 +32,9 @@ metadata:
 
 Use the `gh` CLI to interact with GitHub. Always specify `--repo owner/repo` when not in a git directory, or use URLs directly.
 
-**Rate Limits:** If you encounter an API rate limit or secondary rate limit (e.g., `HTTP 403/429` with `retry-after`), **DO NOT FAIL**. Use the \`queue-manager\` skill (\`scripts/enqueue.sh\`) to queue your command and notify the user it was queued.
+**Rate Limits:** If you encounter an API rate limit or secondary rate limit (e.g., `HTTP 403/429` with `retry-after`), **DO NOT FAIL**. Use the `queue-manager` skill (`scripts/enqueue.sh`) to queue your command and notify the user it was queued.
+
+**Missing CLI (`gh: not found`):** If the `gh` CLI isn't installed in the environment, fallback to using the `web_fetch` or `exec` tool targeting the GitHub REST API (e.g., `curl -s "https://api.github.com/repos/owner/repo/issues?state=open&per_page=5"`). **Do NOT fetch generic URLs that return HTML payloads. Always specify JSON API endpoints (`api.github.com`).**
 
 ## Exploring Repositories
 
