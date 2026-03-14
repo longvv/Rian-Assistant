@@ -21,7 +21,7 @@ RUN go build -o /src/build/news_aggregator workspace/scripts/news_aggregator.go
 # ============================================================
 FROM alpine:3.23
 
-RUN apk add --no-cache ca-certificates tzdata curl python3 py3-requests
+RUN apk add --no-cache ca-certificates tzdata curl python3 py3-requests espeak ffmpeg
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -31,8 +32,10 @@ type TelegramChannel struct {
 	config       *config.Config
 	chatIDs      map[string]int64
 	transcriber  *voice.GroqTranscriber
+	synthesizer  *voice.EspeakSynthesizer
 	placeholders sync.Map // chatID -> messageID
 	stopThinking sync.Map // chatID -> thinkingCancel
+	voiceMode    sync.Map // chatIDStr -> bool
 }
 
 type thinkingCancel struct {
@@ -82,8 +85,10 @@ func NewTelegramChannel(cfg *config.Config, bus *bus.MessageBus) (*TelegramChann
 		config:       cfg,
 		chatIDs:      make(map[string]int64),
 		transcriber:  nil,
+		synthesizer:  voice.NewEspeakSynthesizer(),
 		placeholders: sync.Map{},
 		stopThinking: sync.Map{},
+		voiceMode:    sync.Map{},
 	}, nil
 }
 
@@ -263,6 +268,58 @@ func (c *TelegramChannel) Send(ctx context.Context, msg bus.OutboundMessage) err
 	// Extract inline keyboard buttons before parsing Markdown
 	var keyboard *telego.InlineKeyboardMarkup
 	msg.Content, keyboard = extractInlineKeyboard(msg.Content)
+
+	chatIDStr := fmt.Sprintf("%d", chatID)
+	isVoice := false
+	if v, ok := c.voiceMode.Load(chatIDStr); ok {
+		isVoice = v.(bool)
+	}
+
+	if isVoice && c.synthesizer != nil && c.synthesizer.IsAvailable() {
+		// Clean the markdown content to plain text to sound better during synthesis
+		cleanText := markdownToTelegramHTML(msg.Content)
+		// Strip HTML tags for voice synthesis
+		cleanText = strings.ReplaceAll(cleanText, "<b>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</b>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<i>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</i>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<s>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</s>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<code>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</code>", "")
+		cleanText = strings.ReplaceAll(cleanText, "<pre>", "")
+		cleanText = strings.ReplaceAll(cleanText, "</pre>", "")
+		cleanText = regexp.MustCompile(`<a href="[^"]*">([^<]*)</a>`).ReplaceAllString(cleanText, "$1")
+		
+		audioPath, err := c.synthesizer.Synthesize(ctx, cleanText)
+		if err == nil {
+			defer os.RemoveAll(filepath.Dir(audioPath))
+			voiceFile, err := os.Open(audioPath)
+			if err == nil {
+				defer voiceFile.Close()
+				
+				voiceParams := tu.Voice(tu.ID(chatID), tu.File(voiceFile))
+				if keyboard != nil {
+					voiceParams.ReplyMarkup = keyboard
+				}
+				
+				if pID, ok := c.placeholders.Load(msg.ChatID); ok {
+					_ = c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+						ChatID:    tu.ID(chatID),
+						MessageID: pID.(int),
+					})
+					c.placeholders.Delete(msg.ChatID)
+				}
+				
+				if _, err = c.bot.SendVoice(ctx, voiceParams); err == nil {
+					return nil
+				}
+				logger.ErrorCF("telegram", "Failed to send voice message, falling back to text", map[string]interface{}{"error": err.Error()})
+			}
+		} else {
+			logger.ErrorCF("telegram", "Voice synthesis failed, falling back to text", map[string]interface{}{"error": err.Error()})
+		}
+	}
 
 	// Convert markdown to HTML once — its length determines which path we take.
 	htmlContent := markdownToTelegramHTML(msg.Content)
@@ -478,6 +535,10 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, message *telego.Mes
 	if content == "" {
 		content = "[empty message]"
 	}
+	
+	// Track whether the user sent a voice message
+	isVoiceMsg := message.Voice != nil
+	c.voiceMode.Store(fmt.Sprintf("%d", chatID), isVoiceMsg)
 
 	logger.DebugCF("telegram", "Received message", map[string]interface{}{
 		"sender_id": senderID,
